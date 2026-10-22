@@ -374,7 +374,11 @@ async function startWhatsApp(pairingNumber?: string): Promise<string | undefined
     auth: state,
     printQRInTerminal: false,
     logger: pino({ level: 'silent' }),
-    browser: Browsers.ubuntu('Chrome'),
+    browser: Browsers.macOS('Desktop'),
+    syncFullHistory: false,
+    markOnlineOnConnect: true,
+    keepAliveIntervalMs: 15000,
+    defaultQueryTimeoutMs: 60000,
   });
 
   sock.ev.on('creds.update', saveCreds);
@@ -401,8 +405,7 @@ async function startWhatsApp(pairingNumber?: string): Promise<string | undefined
       currentQRDataUrl = null;
       connectionStatus = 'disconnected';
       const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      logger.warn(`Connexion fermée. Statut: ${statusCode}. Reconnexion: ${shouldReconnect}`);
+      logger.warn({ statusCode, err: (lastDisconnect?.error as any)?.message }, `Connexion fermée. Statut: ${statusCode}`);
 
       if (statusCode === DisconnectReason.restartRequired || statusCode === 515) {
         logger.info('Validation WhatsApp réussie (515 restartRequired). Reconnexion immédiate avec les identifiants enregistrés...');
@@ -411,7 +414,16 @@ async function startWhatsApp(pairingNumber?: string): Promise<string | undefined
         reconnectTimer = setTimeout(() => {
           startWhatsApp().catch(() => {});
         }, 1500);
-      } else if (shouldReconnect) {
+      } else if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
+        logger.warn('Session WhatsApp déconnectée ou révoquée (401 Logged Out). Réinitialisation pour permettre une nouvelle connexion...');
+        clearAuthDir();
+        connectedPhone = null;
+        currentMode = 'qr';
+        reconnectTimer = setTimeout(() => {
+          startWhatsApp().catch(() => {});
+        }, 2000);
+      } else {
+        logger.info(`Reconnexion automatique dans 5 secondes (Statut: ${statusCode})...`);
         reconnectTimer = setTimeout(() => {
           startWhatsApp().catch(() => {});
         }, 5000);
