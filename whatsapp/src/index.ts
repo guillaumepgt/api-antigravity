@@ -2,14 +2,12 @@ import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
-  proto,
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import QRCode from 'qrcode';
 import qrcodeTerminal from 'qrcode-terminal';
 import http from 'node:http';
 import fs from 'node:fs';
-import path from 'node:path';
 
 // Configuration
 const PORT = parseInt(process.env.WHATSAPP_PORT || '3001', 10);
@@ -20,6 +18,7 @@ const ALLOWED_NUMBERS = (process.env.ALLOWED_NUMBERS || '')
   .split(',')
   .map((n) => n.trim().replace(/\D/g, ''))
   .filter((n) => n.length > 0);
+const PAIRING_PHONE = (process.env.PAIRING_PHONE || process.env.PHONE_NUMBER || '').replace(/\D/g, '');
 
 const SYSTEM_PROMPT =
   process.env.SYSTEM_PROMPT ||
@@ -42,6 +41,7 @@ const MAX_HISTORY_MESSAGES = 16;
 // Connection state
 let currentQR: string | null = null;
 let currentQRDataUrl: string | null = null;
+let currentPairingCode: string | null = null;
 let connectionStatus: 'disconnected' | 'connecting' | 'qr_ready' | 'connected' = 'disconnected';
 let connectedPhone: string | null = null;
 let sock: ReturnType<typeof makeWASocket> | null = null;
@@ -150,6 +150,7 @@ function splitMessage(text: string, maxLength = 3800): string[] {
 // Connect to WhatsApp
 async function connectToWhatsApp() {
   connectionStatus = 'connecting';
+  currentPairingCode = null;
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
 
@@ -160,11 +161,29 @@ async function connectToWhatsApp() {
     auth: state,
     printQRInTerminal: false,
     logger: pino({ level: 'silent' }),
-    browser: ['Antigravity AI', 'Chrome', '1.0.0'],
+    browser: ['Ubuntu', 'Chrome', '124.0.0.0'],
     generateHighQualityLinkPreview: true,
   });
 
   sock.ev.on('creds.update', saveCreds);
+
+  // If phone number is configured via environment variable and not registered, auto request pairing code
+  if (PAIRING_PHONE && !state.creds.registered) {
+    setTimeout(async () => {
+      try {
+        if (sock && !sock.authState.creds.registered) {
+          logger.info(`Demande automatique de code d'association pour +${PAIRING_PHONE}...`);
+          const code = await sock.requestPairingCode(PAIRING_PHONE);
+          currentPairingCode = code;
+          console.log('\n======================================================');
+          console.log(`🔑 CODE D'ASSOCIATION POUR LE NUMÉRO +${PAIRING_PHONE} : ${code}`);
+          console.log('======================================================\n');
+        }
+      } catch (err: any) {
+        logger.error(err, 'Erreur auto requestPairingCode');
+      }
+    }, 3500);
+  }
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
@@ -179,14 +198,16 @@ async function connectToWhatsApp() {
       }
       console.log('\n======================================================');
       console.log('📱 SCANNEZ LE QR CODE CI-DESSOUS DANS WHATSAPP :');
+      console.log('(Ou utilisez l\'association sans caméra par code à 8 chiffres)');
       console.log('======================================================\n');
       qrcodeTerminal.generate(qr, { small: true });
-      console.log('\nOu ouvrez votre navigateur sur http://<VOTRE-SERVEUR>:3000/whatsapp/\n');
+      console.log('\nAccédez à l\'interface : http://<VOTRE-SERVEUR>:3000/whatsapp/\n');
     }
 
     if (connection === 'close') {
       currentQR = null;
       currentQRDataUrl = null;
+      currentPairingCode = null;
       connectionStatus = 'disconnected';
       const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
@@ -209,6 +230,7 @@ async function connectToWhatsApp() {
     } else if (connection === 'open') {
       currentQR = null;
       currentQRDataUrl = null;
+      currentPairingCode = null;
       connectionStatus = 'connected';
       const id = sock?.user?.id || '';
       connectedPhone = id.split(':')[0].split('@')[0];
@@ -222,15 +244,11 @@ async function connectToWhatsApp() {
     if (m.type !== 'notify') return;
 
     for (const msg of m.messages) {
-      // Ignore messages sent by bot itself unless it's a message to self in personal chat
       const isFromMe = msg.key.fromMe ?? false;
       const jid = msg.key.remoteJid;
       if (!jid || jid.endsWith('@broadcast')) continue;
 
-      // Check if message is in a group or direct chat
       const isGroup = jid.endsWith('@g.us');
-
-      // Extract sender phone
       const senderJid = isGroup ? msg.key.participant || '' : jid;
       const senderPhone = senderJid.split('@')[0].split(':')[0].replace(/\D/g, '');
 
@@ -240,7 +258,6 @@ async function connectToWhatsApp() {
         continue;
       }
 
-      // Extract text content
       const text =
         msg.message?.conversation ||
         msg.message?.extendedTextMessage?.text ||
@@ -260,13 +277,11 @@ async function connectToWhatsApp() {
 
       // Handle message to self (Discuter avec soi-même)
       if (isFromMe && !isGroup) {
-        // If message is from me, only trigger if it starts with ! or /ai
         if (!trimmedText.startsWith('!ai ') && !trimmedText.startsWith('!claude ') && !trimmedText.startsWith('! ') && !trimmedText.startsWith('/ai ')) {
           continue;
         }
       }
 
-      // Clean prompt
       let cleanPrompt = trimmedText
         .replace(/^(!ai|!claude|\/ai)\s+/i, '')
         .replace(/^!\s*/, '')
@@ -295,22 +310,16 @@ _Vos discussions sont sécurisées et traitées directement sur votre serveur pr
       logger.info(`Message reçu de +${senderPhone} : "${cleanPrompt.slice(0, 50)}..."`);
 
       try {
-        // Show "typing..." presence
         await sock?.sendPresenceUpdate('composing', jid);
-
-        // Fetch response from Antigravity
         const reply = await askAntigravity(jid, cleanPrompt);
-
-        // Stop "typing..."
         await sock?.sendPresenceUpdate('paused', jid);
 
-        // Send split chunks
         const chunks = splitMessage(reply);
         for (const chunk of chunks) {
           await sock?.sendMessage(jid, { text: chunk }, { quoted: msg });
         }
       } catch (err: any) {
-        logger.error(`Erreur traitement message: ${err.message}`);
+        logger.error(err, `Erreur traitement message`);
         await sock?.sendPresenceUpdate('paused', jid);
         await sock?.sendMessage(
           jid,
@@ -322,11 +331,11 @@ _Vos discussions sont sécurisées et traitées directement sur votre serveur pr
   });
 }
 
-// Web UI for QR Code and Status
+// Web UI & API server
 const server = http.createServer((req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
-  // API endpoint
+  // API Status endpoint
   if (url.pathname === '/api/status' || url.pathname === '/whatsapp/api/status') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(
@@ -335,9 +344,43 @@ const server = http.createServer((req, res) => {
         phone: connectedPhone,
         hasQr: !!currentQRDataUrl,
         qr: currentQRDataUrl,
+        pairingCode: currentPairingCode,
         allowedNumbers: ALLOWED_NUMBERS,
       })
     );
+    return;
+  }
+
+  // API Pairing Code endpoint (No camera needed)
+  if ((url.pathname === '/api/pairing-code' || url.pathname === '/whatsapp/api/pairing-code') && req.method === 'POST') {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const data = JSON.parse(body || '{}');
+        const phone = (data.phoneNumber || '').toString().replace(/\D/g, '');
+        if (!phone || phone.length < 8) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Veuillez saisir un numéro valide avec l\'indicatif pays (ex: 33612345678).' }));
+          return;
+        }
+        if (!sock) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Service WhatsApp non connecté.' }));
+          return;
+        }
+        logger.info(`Demande de code d'association sans caméra pour +${phone}...`);
+        const code = await sock.requestPairingCode(phone);
+        currentPairingCode = code;
+        logger.info(`Code d'association généré: ${code}`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, code }));
+      } catch (err: any) {
+        logger.error(err, 'Erreur génération pairing code');
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message || 'Impossible d\'obtenir le code auprès de WhatsApp.' }));
+      }
+    });
     return;
   }
 
@@ -373,14 +416,76 @@ const server = http.createServer((req, res) => {
       💬
     </div>
     <h1 class="text-2xl font-bold tracking-tight text-white mb-1">WhatsApp & Antigravity</h1>
-    <p class="text-slate-400 text-sm mb-6">Connectez votre compte WhatsApp à Claude Sonnet 4.6</p>
+    <p class="text-slate-400 text-sm mb-6">Associez votre WhatsApp à Claude Sonnet 4.6</p>
+
+    <!-- Tab navigation -->
+    <div id="tab-nav" class="flex p-1 bg-[#0c0e15] border border-slate-800 rounded-2xl mb-5">
+      <button id="tab-code-btn" onclick="setTab('code')" class="flex-1 py-2 text-xs font-semibold rounded-xl transition bg-emerald-600 text-white shadow-sm flex items-center justify-center gap-1.5 cursor-pointer">
+        <span>🔢 Sans caméra (Code)</span>
+      </button>
+      <button id="tab-qr-btn" onclick="setTab('qr')" class="flex-1 py-2 text-xs font-semibold rounded-xl transition text-slate-400 hover:text-white flex items-center justify-center gap-1.5 cursor-pointer">
+        <span>📷 Scanner QR Code</span>
+      </button>
+    </div>
 
     <div id="status-card" class="bg-[#1a1e2e] border border-slate-700/60 rounded-2xl p-5 mb-6">
+      
+      <!-- Loading State -->
       <div id="loading-spinner" class="py-8">
         <div class="w-10 h-10 border-4 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin mx-auto mb-3"></div>
-        <p class="text-slate-400 text-sm">Chargement de l'état de WhatsApp...</p>
+        <p class="text-slate-400 text-sm">Initialisation de la passerelle WhatsApp...</p>
       </div>
 
+      <!-- TAB 1: PAIRING CODE (NO CAMERA NEEDED) -->
+      <div id="code-container" class="hidden text-left">
+        <p class="text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-2 text-center">
+          Connexion sans caméra par code à 8 chiffres
+        </p>
+        <p class="text-xs text-slate-300 mb-4 leading-relaxed text-center">
+          Entrez votre numéro WhatsApp pour générer un code d'association à saisir directement dans l'application.
+        </p>
+
+        <form onsubmit="requestCode(event)" class="space-y-3 mb-4">
+          <div>
+            <label class="block text-[11px] font-medium text-slate-400 mb-1">Votre numéro (avec indicatif pays, sans +)</label>
+            <input 
+              id="phone-input" 
+              type="tel" 
+              placeholder="Ex: 33612345678" 
+              class="w-full px-3.5 py-2.5 bg-[#0c0e15] border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-emerald-500 font-mono tracking-wider"
+              required 
+            />
+          </div>
+          <button 
+            id="code-submit-btn" 
+            type="submit" 
+            class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl shadow-lg shadow-emerald-600/20 transition cursor-pointer"
+          >
+            Obtenir le code d'association
+          </button>
+        </form>
+
+        <div id="code-display" class="hidden bg-[#0c0e15] border border-emerald-500/40 rounded-2xl p-4 text-center mb-4">
+          <p class="text-[11px] text-slate-400 uppercase tracking-wider mb-1">Votre code d'association</p>
+          <div class="flex items-center justify-center gap-3 my-2">
+            <span id="pairing-code-text" class="text-2xl font-mono font-extrabold tracking-widest text-emerald-300"></span>
+            <button onclick="copyPairingCode()" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-lg transition" title="Copier le code">
+              Copier
+            </button>
+          </div>
+          <p class="text-[11px] text-emerald-400 font-medium">Validité : ~2 minutes</p>
+        </div>
+
+        <div class="bg-black/30 p-3.5 rounded-xl border border-slate-800 text-xs text-slate-300 space-y-1.5">
+          <p class="font-semibold text-slate-200 mb-1">Instructions sur votre téléphone :</p>
+          <p>1. Ouvrez <strong>WhatsApp</strong>.</p>
+          <p>2. Allez dans <strong>Réglages</strong> (ou ⋮) &gt; <strong>Appareils connectés</strong> &gt; <strong>Connecter un appareil</strong>.</p>
+          <p>3. En bas de l'écran du scanner, touchez :<br/><span class="text-emerald-400 font-medium">« Associer avec un numéro de téléphone »</span>.</p>
+          <p>4. Tapez ce code à 8 chiffres/lettres.</p>
+        </div>
+      </div>
+
+      <!-- TAB 2: QR CODE -->
       <div id="qr-container" class="hidden">
         <p class="text-xs uppercase font-semibold text-emerald-400 tracking-wider mb-3">Scannez avec votre téléphone</p>
         <div class="bg-white p-3 rounded-2xl inline-block shadow-xl mb-4">
@@ -394,6 +499,7 @@ const server = http.createServer((req, res) => {
         </ol>
       </div>
 
+      <!-- CONNECTED STATE -->
       <div id="connected-container" class="hidden py-4">
         <div class="w-12 h-12 bg-emerald-500/20 text-emerald-400 rounded-full flex items-center justify-center mx-auto mb-3 text-2xl">
           ✓
@@ -401,9 +507,9 @@ const server = http.createServer((req, res) => {
         <h3 class="text-lg font-semibold text-white">Connecté avec succès !</h3>
         <p id="connected-phone" class="text-emerald-400 font-mono text-sm mt-1 mb-4"></p>
         <p class="text-xs text-slate-400 leading-relaxed">
-          Votre bot est en ligne. Envoyez un message WhatsApp à ce compte (ou écrivez à vous-même si c'est votre propre numéro) pour discuter avec Claude !
+          Votre bot est en ligne. Envoyez un message WhatsApp à ce compte (ou écrivez à vous-même) pour discuter avec Claude !
         </p>
-        <button onclick="logout()" class="mt-5 px-4 py-2 bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 text-xs rounded-xl transition border border-rose-500/30">
+        <button onclick="logout()" class="mt-5 px-4 py-2 bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 text-xs rounded-xl transition border border-rose-500/30 cursor-pointer">
           Déconnecter cet appareil
         </button>
       </div>
@@ -416,6 +522,63 @@ const server = http.createServer((req, res) => {
   </div>
 
   <script>
+    let activeTab = 'code';
+
+    function setTab(tab) {
+      activeTab = tab;
+      const codeBtn = document.getElementById('tab-code-btn');
+      const qrBtn = document.getElementById('tab-qr-btn');
+      const codeCont = document.getElementById('code-container');
+      const qrCont = document.getElementById('qr-container');
+
+      if (tab === 'code') {
+        codeBtn.className = 'flex-1 py-2 text-xs font-semibold rounded-xl transition bg-emerald-600 text-white shadow-sm flex items-center justify-center gap-1.5 cursor-pointer';
+        qrBtn.className = 'flex-1 py-2 text-xs font-semibold rounded-xl transition text-slate-400 hover:text-white flex items-center justify-center gap-1.5 cursor-pointer';
+        codeCont.classList.remove('hidden');
+        qrCont.classList.add('hidden');
+      } else {
+        qrBtn.className = 'flex-1 py-2 text-xs font-semibold rounded-xl transition bg-emerald-600 text-white shadow-sm flex items-center justify-center gap-1.5 cursor-pointer';
+        codeBtn.className = 'flex-1 py-2 text-xs font-semibold rounded-xl transition text-slate-400 hover:text-white flex items-center justify-center gap-1.5 cursor-pointer';
+        qrCont.classList.remove('hidden');
+        codeCont.classList.add('hidden');
+      }
+    }
+
+    async function requestCode(e) {
+      e.preventDefault();
+      const phone = document.getElementById('phone-input').value.trim();
+      const btn = document.getElementById('code-submit-btn');
+      btn.disabled = true;
+      btn.innerText = 'Génération en cours...';
+
+      try {
+        const res = await fetch('/whatsapp/api/pairing-code', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phoneNumber: phone })
+        });
+        const data = await res.json();
+        if (data.code) {
+          const formatted = data.code.length === 8 ? data.code.slice(0, 4) + ' - ' + data.code.slice(4) : data.code;
+          document.getElementById('pairing-code-text').innerText = formatted;
+          document.getElementById('code-display').classList.remove('hidden');
+        } else {
+          alert('Erreur: ' + (data.error || 'Impossible d\\'obtenir le code'));
+        }
+      } catch (err) {
+        alert('Erreur: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = 'Obtenir le code d\\'association';
+      }
+    }
+
+    function copyPairingCode() {
+      const code = document.getElementById('pairing-code-text').innerText.replace(/\s*-\s*/, '');
+      navigator.clipboard.writeText(code);
+      alert('Code ' + code + ' copié dans le presse-papier !');
+    }
+
     async function updateStatus() {
       try {
         const res = await fetch('/whatsapp/api/status');
@@ -424,17 +587,32 @@ const server = http.createServer((req, res) => {
         document.getElementById('loading-spinner').classList.add('hidden');
         
         if (data.status === 'connected') {
+          document.getElementById('tab-nav').classList.add('hidden');
+          document.getElementById('code-container').classList.add('hidden');
           document.getElementById('qr-container').classList.add('hidden');
           document.getElementById('connected-container').classList.remove('hidden');
           document.getElementById('connected-phone').innerText = '+' + (data.phone || '');
-        } else if (data.hasQr && data.qr) {
-          document.getElementById('connected-container').classList.add('hidden');
-          document.getElementById('qr-container').classList.remove('hidden');
-          document.getElementById('qr-image').src = data.qr;
         } else {
-          document.getElementById('qr-container').classList.add('hidden');
+          document.getElementById('tab-nav').classList.remove('hidden');
           document.getElementById('connected-container').classList.add('hidden');
-          document.getElementById('loading-spinner').classList.remove('hidden');
+
+          if (data.pairingCode) {
+            const formatted = data.pairingCode.length === 8 ? data.pairingCode.slice(0, 4) + ' - ' + data.pairingCode.slice(4) : data.pairingCode;
+            document.getElementById('pairing-code-text').innerText = formatted;
+            document.getElementById('code-display').classList.remove('hidden');
+          }
+
+          if (data.hasQr && data.qr) {
+            document.getElementById('qr-image').src = data.qr;
+          }
+
+          if (activeTab === 'code') {
+            document.getElementById('code-container').classList.remove('hidden');
+            document.getElementById('qr-container').classList.add('hidden');
+          } else {
+            document.getElementById('qr-container').classList.remove('hidden');
+            document.getElementById('code-container').classList.add('hidden');
+          }
         }
       } catch (e) {
         console.error(e);
