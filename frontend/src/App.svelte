@@ -18,7 +18,7 @@
     type UserKeyInfo,
   } from './lib/api';
   import type { AppSettings, Conversation, Message, Model } from './lib/types';
-  import { Bot, AlertCircle, Menu, X, Terminal, ShieldCheck, KeyRound, Key } from 'lucide-svelte';
+  import { Bot, AlertCircle, Menu, X, Terminal, ShieldCheck, KeyRound, Key, MessageSquare } from 'lucide-svelte';
 
   let settings = $state<AppSettings>(getStoredSettings());
   let conversations = $state<Conversation[]>([]);
@@ -372,6 +372,17 @@
             <span class="hidden sm:inline">Backend unreachable</span>
           </div>
         {/if}
+
+        <a
+          href="/whatsapp/"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-950/60 border border-emerald-700/60 hover:bg-emerald-900/60 text-emerald-300 text-xs font-medium transition-all cursor-pointer shadow-sm"
+          title="Connecter mon WhatsApp au serveur Antigravity"
+        >
+          <MessageSquare size={13} />
+          <span class="hidden sm:inline">WhatsApp</span>
+        </a>
 
         <button
           type="button"

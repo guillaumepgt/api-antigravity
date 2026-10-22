@@ -14,6 +14,8 @@ api_key.txt
 antigravity-oauth-token
 credentials.json
 token.json
+auth_info_baileys/
+**/auth_info_baileys/
 
 # Local Workspace & Generated Data
 workspace/*
