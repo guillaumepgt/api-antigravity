@@ -18,8 +18,12 @@ let API_KEY = process.env.API_KEY || '';
 const AUTH_DIR = process.env.AUTH_DIR || './auth_info_baileys';
 function normalizePhoneNumber(input: string): string {
   let cleaned = (input || '').toString().trim().replace(/\D/g, '');
+  // Automatic conversion for UK numbers (e.g. 07... with 11 digits) -> 447...
+  if (cleaned.length === 11 && cleaned.startsWith('07')) {
+    cleaned = '44' + cleaned.slice(1);
+  }
   // Automatic conversion for French national numbers (e.g. 06..., 07...) -> 336..., 337...
-  if (cleaned.length === 10 && cleaned.startsWith('0')) {
+  else if (cleaned.length === 10 && cleaned.startsWith('0')) {
     cleaned = '33' + cleaned.slice(1);
   }
   return cleaned;
@@ -238,7 +242,11 @@ function registerMessageHandler(s: ReturnType<typeof makeWASocket>) {
       if (!trimmedText) continue;
 
       const myPhone = s?.user?.id?.split(':')[0]?.replace(/\D/g, '') || '';
-      const isSelfChat = !isGroup && myPhone && jid.includes(myPhone);
+      const myLid = (s?.user as any)?.lid?.split(':')[0]?.replace(/\D/g, '') || '';
+      const isSelfChat = !isGroup && (
+        (myPhone && jid.includes(myPhone)) ||
+        (myLid && jid.includes(myLid))
+      );
 
       // In groups: reply if mentioned, if replying to a bot message, or if prefix used
       if (isGroup) {
@@ -374,7 +382,7 @@ async function startWhatsApp(pairingNumber?: string): Promise<string | undefined
     auth: state,
     printQRInTerminal: false,
     logger: pino({ level: 'silent' }),
-    browser: Browsers.macOS('Desktop'),
+    browser: Browsers.ubuntu('Chrome'),
     syncFullHistory: false,
     markOnlineOnConnect: true,
     keepAliveIntervalMs: 15000,
@@ -526,6 +534,11 @@ const server = http.createServer((req, res) => {
     req.on('data', (chunk) => { body += chunk; });
     req.on('end', async () => {
       try {
+        if (connectionStatus === 'connected' && sock?.user) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: `WhatsApp est déjà connecté au numéro +${connectedPhone}. Veuillez d'abord cliquer sur "Déconnecter" pour changer de compte.` }));
+          return;
+        }
         const data = JSON.parse(body || '{}');
         const phone = normalizePhoneNumber(data.phoneNumber || '');
         if (!phone || phone.length < 8) {
@@ -748,75 +761,84 @@ const server = http.createServer((req, res) => {
 
       <!-- ================= TAB 2: CODE (BAILEYS SANS CAMÉRA) ================= -->
       <div id="code-container" class="hidden space-y-4 text-left">
-        <div id="baileys-status-banner" class="hidden bg-emerald-950/40 border border-emerald-500/30 rounded-xl p-3 flex items-center justify-between">
-          <div>
-            <p class="text-xs font-bold text-emerald-400">✅ Connecté à WhatsApp</p>
-            <p id="baileys-connected-phone" class="text-xs text-slate-300 font-mono"></p>
-          </div>
-          <button onclick="logout()" class="px-3 py-1.5 bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 text-xs rounded-lg transition border border-rose-500/30">
-            Déconnecter
-          </button>
-        </div>
-
-        <p class="text-xs font-semibold text-emerald-400 uppercase tracking-wider text-center">
-          Connexion sans caméra par code à 8 chiffres
-        </p>
-        <p class="text-xs text-slate-300 leading-relaxed text-center">
-          Entrez votre numéro WhatsApp pour générer un code d'association à saisir directement dans l'application.
-        </p>
-
-        <form onsubmit="requestCode(event)" class="space-y-3">
-          <div>
-            <label class="block text-[11px] font-medium text-slate-400 mb-1">Votre numéro mobile (ex: 07 66 81 73 54 ou 33766817354)</label>
-            <input 
-              id="phone-input" 
-              type="tel" 
-              placeholder="07 66 81 73 54 ou 33766817354" 
-              class="w-full px-3.5 py-2.5 bg-[#0c0e15] border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-emerald-500 font-mono tracking-wider"
-              required 
-            />
-          </div>
-          <button 
-            id="code-submit-btn" 
-            type="submit" 
-            class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl shadow-lg shadow-emerald-600/20 transition cursor-pointer"
-          >
-            Obtenir le code d'association
-          </button>
-        </form>
-
-        <div id="code-display" class="hidden bg-[#0c0e15] border border-emerald-500/40 rounded-2xl p-4 text-center">
-          <p class="text-[11px] text-slate-400 uppercase tracking-wider mb-1">Votre code d'association</p>
-          <div class="flex items-center justify-center gap-3 my-2">
-            <span id="pairing-code-text" class="text-2xl font-mono font-extrabold tracking-widest text-emerald-300"></span>
-            <button onclick="copyPairingCode()" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-lg transition" title="Copier le code">
-              Copier
+        <div id="baileys-status-banner" class="hidden bg-emerald-950/40 border border-emerald-500/30 rounded-xl p-4 space-y-2">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-xs font-bold text-emerald-400">✅ Connecté à WhatsApp avec succès</p>
+              <p id="baileys-connected-phone" class="text-xs text-slate-300 font-mono mt-0.5"></p>
+            </div>
+            <button onclick="logout()" class="px-3 py-1.5 bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 text-xs rounded-lg transition border border-rose-500/30 cursor-pointer">
+              Déconnecter
             </button>
           </div>
-          <p class="text-[11px] text-emerald-400 font-medium">Saisissez-le dans WhatsApp sur votre mobile</p>
+          <p class="text-[11px] text-emerald-300/80 leading-relaxed pt-1 border-t border-emerald-500/20">
+            Votre assistant IA est en ligne. Envoyez n'importe quel message à ce compte (ou dans votre discussion <em>« Message à vous-même »</em>) pour obtenir une réponse directe de Claude !
+          </p>
         </div>
 
-        <div class="bg-black/30 p-3.5 rounded-xl border border-slate-800 text-xs text-slate-300 space-y-1.5">
-          <p class="font-semibold text-slate-200 mb-1">Instructions sur votre téléphone :</p>
-          <p>1. Ouvrez <strong>WhatsApp</strong>.</p>
-          <p>2. Allez dans <strong>Réglages</strong> (ou ⋮) &gt; <strong>Appareils connectés</strong> &gt; <strong>Connecter un appareil</strong>.</p>
-          <p>3. En bas de l'écran du scanner, touchez :<br/><span class="text-emerald-400 font-medium">« Associer avec un numéro de téléphone »</span>.</p>
-          <p>4. Tapez ce code à 8 chiffres/lettres.</p>
+        <div id="code-form-section" class="space-y-4">
+          <p class="text-xs font-semibold text-emerald-400 uppercase tracking-wider text-center">
+            Connexion sans caméra par code à 8 chiffres
+          </p>
+          <p class="text-xs text-slate-300 leading-relaxed text-center">
+            Entrez votre numéro WhatsApp pour générer un code d'association à saisir directement dans l'application.
+          </p>
+
+          <form onsubmit="requestCode(event)" class="space-y-3">
+            <div>
+              <label class="block text-[11px] font-medium text-slate-400 mb-1">Votre numéro mobile (ex: 07 66 81 73 54 ou 33766817354)</label>
+              <input 
+                id="phone-input" 
+                type="tel" 
+                placeholder="07 66 81 73 54 ou 33766817354" 
+                class="w-full px-3.5 py-2.5 bg-[#0c0e15] border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-emerald-500 font-mono tracking-wider"
+                required 
+              />
+            </div>
+            <button 
+              id="code-submit-btn" 
+              type="submit" 
+              class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl shadow-lg shadow-emerald-600/20 transition cursor-pointer"
+            >
+              Obtenir le code d'association
+            </button>
+          </form>
+
+          <div id="code-display" class="hidden bg-[#0c0e15] border border-emerald-500/40 rounded-2xl p-4 text-center">
+            <p class="text-[11px] text-slate-400 uppercase tracking-wider mb-1">Votre code d'association</p>
+            <div class="flex items-center justify-center gap-3 my-2">
+              <span id="pairing-code-text" class="text-2xl font-mono font-extrabold tracking-widest text-emerald-300"></span>
+              <button onclick="copyPairingCode()" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-lg transition" title="Copier le code">
+                Copier
+              </button>
+            </div>
+            <p class="text-[11px] text-emerald-400 font-medium">Saisissez-le dans WhatsApp sur votre mobile</p>
+          </div>
+
+          <div class="bg-black/30 p-3.5 rounded-xl border border-slate-800 text-xs text-slate-300 space-y-1.5">
+            <p class="font-semibold text-slate-200 mb-1">Instructions sur votre téléphone :</p>
+            <p>1. Ouvrez <strong>WhatsApp</strong>.</p>
+            <p>2. Allez dans <strong>Réglages</strong> (ou ⋮) &gt; <strong>Appareils connectés</strong> &gt; <strong>Connecter un appareil</strong>.</p>
+            <p>3. En bas de l'écran du scanner, touchez :<br/><span class="text-emerald-400 font-medium">« Associer avec un numéro de téléphone »</span>.</p>
+            <p>4. Tapez ce code à 8 chiffres/lettres.</p>
+          </div>
         </div>
       </div>
 
       <!-- ================= TAB 3: SCAN QR (BAILEYS) ================= -->
       <div id="qr-container" class="hidden text-center space-y-4">
-        <p class="text-xs uppercase font-semibold text-emerald-400 tracking-wider">Scannez avec votre téléphone</p>
-        <div class="bg-white p-3 rounded-2xl inline-block shadow-xl">
-          <img id="qr-image" src="" alt="QR Code WhatsApp" class="w-56 h-56 mx-auto object-contain" />
+        <div id="qr-box">
+          <p class="text-xs uppercase font-semibold text-emerald-400 tracking-wider">Scannez avec votre téléphone</p>
+          <div class="bg-white p-3 rounded-2xl inline-block shadow-xl my-3">
+            <img id="qr-image" src="" alt="QR Code WhatsApp" class="w-56 h-56 mx-auto object-contain" />
+          </div>
+          <ol class="text-left text-xs text-slate-300 space-y-1.5 bg-black/30 p-3.5 rounded-xl border border-slate-800">
+            <li>1. Ouvrez <strong>WhatsApp</strong> sur votre téléphone</li>
+            <li>2. Allez dans <strong>Réglages</strong> &gt; <strong>Appareils connectés</strong></li>
+            <li>3. Touchez <strong>Connecter un appareil</strong></li>
+            <li>4. Pointez votre caméra vers ce code QR</li>
+          </ol>
         </div>
-        <ol class="text-left text-xs text-slate-300 space-y-1.5 bg-black/30 p-3.5 rounded-xl border border-slate-800">
-          <li>1. Ouvrez <strong>WhatsApp</strong> sur votre téléphone</li>
-          <li>2. Allez dans <strong>Réglages</strong> &gt; <strong>Appareils connectés</strong></li>
-          <li>3. Touchez <strong>Connecter un appareil</strong></li>
-          <li>4. Pointez votre caméra vers ce code QR</li>
-        </ol>
       </div>
 
     </div>
@@ -888,7 +910,9 @@ const server = http.createServer((req, res) => {
 
     function normalizePhone(val) {
       let c = (val || '').toString().trim().replace(/\\D/g, '');
-      if (c.length === 10 && c.startsWith('0')) {
+      if (c.length === 11 && c.startsWith('07')) {
+        c = '44' + c.slice(1);
+      } else if (c.length === 10 && c.startsWith('0')) {
         c = '33' + c.slice(1);
       }
       return c;
@@ -947,11 +971,17 @@ const server = http.createServer((req, res) => {
 
         // Baileys phone connection
         const bBanner = document.getElementById('baileys-status-banner');
+        const codeSection = document.getElementById('code-form-section');
+        const qrBox = document.getElementById('qr-box');
         if (data.status === 'connected') {
           bBanner.classList.remove('hidden');
+          if (codeSection) codeSection.classList.add('hidden');
+          if (qrBox) qrBox.classList.add('hidden');
           document.getElementById('baileys-connected-phone').innerText = 'Numéro associé : +' + (data.phone || '');
         } else {
           bBanner.classList.add('hidden');
+          if (codeSection) codeSection.classList.remove('hidden');
+          if (qrBox) qrBox.classList.remove('hidden');
           if (data.pairingCode) {
             const formatted = data.pairingCode.length === 8 ? data.pairingCode.slice(0, 4) + ' - ' + data.pairingCode.slice(4) : data.pairingCode;
             document.getElementById('pairing-code-text').innerText = formatted;
