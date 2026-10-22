@@ -1,0 +1,61 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: api-antigravity-backend:latest
+    container_name: antigravity-api
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "7681:7681"
+    environment:
+      - API_KEY=${API_KEY:-}
+      - GEMINI_FORCE_FILE_STORAGE=true
+      - TZ=UTC
+      - TERM=xterm-256color
+    volumes:
+      # Persistent volume for Antigravity Google credentials & sessions
+      - antigravity_gemini:/root/.gemini
+      # Workspace directory for editing files
+      - ${WORKSPACE_PATH:-./workspace}:/workspace:rw
+      # Docker socket to allow spawning isolated user containers on demand via curl
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "15m"
+        max-file: "3"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: api-antigravity-frontend:latest
+    container_name: antigravity-web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  antigravity_gemini:

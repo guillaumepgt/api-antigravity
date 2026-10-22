@@ -1,0 +1,72 @@
+# ==========================================
+# Antigravity API - Production .gitignore
+# ==========================================
+
+# Secrets & Environment variables
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.crt
+*.cert
+api_key.txt
+antigravity-oauth-token
+credentials.json
+token.json
+
+# Local Workspace & Generated Data
+workspace/*
+!workspace/.gitkeep
+.gemini/
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+conversation_summaries.db
+
+# IDE & Editor Configurations
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+*.code-workspace
+*.swp
+*.swo
+*~
+
+# Rust Build Artifacts
+backend/target/
+**/target/
+**/*.rs.bk
+
+# Node & Frontend Build Artifacts
+frontend/node_modules/
+**/node_modules/
+frontend/dist/
+**/dist/
+.svelte-kit/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Docker & Container Artifacts
+*.cid
+*.pid
+
+# Operating System & Logs
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.log
+logs/
+tmp/
+temp/
