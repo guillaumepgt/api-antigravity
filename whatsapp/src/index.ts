@@ -196,12 +196,25 @@ function splitMessage(text: string, maxLength = 3800): string[] {
   return chunks;
 }
 
+const sentMessageIds = new Set<string>();
+
+function markSentMessage(id?: string | null) {
+  if (!id) return;
+  sentMessageIds.add(id);
+  if (sentMessageIds.size > 2000) {
+    const first = sentMessageIds.values().next().value;
+    if (first) sentMessageIds.delete(first);
+  }
+}
+
 // Register incoming message handlers on a socket instance
 function registerMessageHandler(s: ReturnType<typeof makeWASocket>) {
   s.ev.on('messages.upsert', async (m) => {
     if (m.type !== 'notify') return;
 
     for (const msg of m.messages) {
+      if (msg.key.id && sentMessageIds.has(msg.key.id)) continue;
+
       const isFromMe = msg.key.fromMe ?? false;
       const jid = msg.key.remoteJid;
       if (!jid || jid.endsWith('@broadcast')) continue;
@@ -224,27 +237,42 @@ function registerMessageHandler(s: ReturnType<typeof makeWASocket>) {
       const trimmedText = text.trim();
       if (!trimmedText) continue;
 
+      const myPhone = s?.user?.id?.split(':')[0]?.replace(/\D/g, '') || '';
+      const isSelfChat = !isGroup && myPhone && jid.includes(myPhone);
+
+      // In groups: reply if mentioned, if replying to a bot message, or if prefix used
       if (isGroup) {
-        const myJid = s?.user?.id?.split(':')[0] + '@s.whatsapp.net';
-        const mentionedMe = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.includes(myJid);
-        const hasPrefix = trimmedText.startsWith('!ai ') || trimmedText.startsWith('!claude ') || trimmedText.startsWith('/ai ');
-        if (!mentionedMe && !hasPrefix) continue;
+        const myJid = myPhone ? `${myPhone}@s.whatsapp.net` : '';
+        const mentionedJids = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+        const mentionedMe = myPhone && (mentionedJids.includes(myJid) || mentionedJids.some((j: string) => j.includes(myPhone)));
+        const quotedParticipant = msg.message?.extendedTextMessage?.contextInfo?.participant || '';
+        const isReplyingToMe = myPhone && quotedParticipant.includes(myPhone);
+        const hasPrefix = trimmedText.startsWith('!ai ') || trimmedText.startsWith('!claude ') || trimmedText.startsWith('/ai ') || trimmedText.startsWith('!');
+
+        if (!mentionedMe && !hasPrefix && !isReplyingToMe) {
+          continue;
+        }
       }
 
-      if (isFromMe && !isGroup) {
+      // In private 1-to-1 chats:
+      // If sent from the user to a third-party contact, don't trigger unless prefixed
+      if (isFromMe && !isGroup && !isSelfChat) {
         if (!trimmedText.startsWith('!ai ') && !trimmedText.startsWith('!claude ') && !trimmedText.startsWith('! ') && !trimmedText.startsWith('/ai ')) {
           continue;
         }
       }
 
+      // Any message sent TO the bot number (or in self-chat) is answered unconditionally!
       let cleanPrompt = trimmedText
         .replace(/^(!ai|!claude|\/ai)\s+/i, '')
         .replace(/^!\s*/, '')
+        .replace(/@\d+\s*/g, '')
         .trim();
 
       if (cleanPrompt === '/clear' || cleanPrompt === '!clear' || cleanPrompt === '!reset') {
         conversationHistory.delete(jid);
-        await s?.sendMessage(jid, { text: '🧹 *Historique de discussion réinitialisé avec succès !*' }, { quoted: msg });
+        const sent = await s?.sendMessage(jid, { text: '🧹 *Historique de discussion réinitialisé avec succès !*' }, { quoted: msg });
+        if (sent?.key?.id) markSentMessage(sent.key.id);
         continue;
       }
 
@@ -257,7 +285,8 @@ function registerMessageHandler(s: ReturnType<typeof makeWASocket>) {
 • \`/help\` : Affiche cette aide.
 
 _Vos discussions sont sécurisées et traitées directement sur votre serveur privé._`;
-        await s?.sendMessage(jid, { text: helpMsg }, { quoted: msg });
+        const sent = await s?.sendMessage(jid, { text: helpMsg }, { quoted: msg });
+        if (sent?.key?.id) markSentMessage(sent.key.id);
         continue;
       }
 
@@ -270,16 +299,18 @@ _Vos discussions sont sécurisées et traitées directement sur votre serveur pr
 
         const chunks = splitMessage(reply);
         for (const chunk of chunks) {
-          await s?.sendMessage(jid, { text: chunk }, { quoted: msg });
+          const sent = await s?.sendMessage(jid, { text: chunk }, { quoted: msg });
+          if (sent?.key?.id) markSentMessage(sent.key.id);
         }
       } catch (err: any) {
         logger.error(err, 'Erreur traitement message');
         await s?.sendPresenceUpdate('paused', jid);
-        await s?.sendMessage(
+        const sent = await s?.sendMessage(
           jid,
           { text: `⚠️ *Erreur Antigravity* : ${err.message || 'Le serveur n\'a pas pu répondre.'}` },
           { quoted: msg }
         );
+        if (sent?.key?.id) markSentMessage(sent.key.id);
       }
     }
   });
