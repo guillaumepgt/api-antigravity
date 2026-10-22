@@ -2,12 +2,14 @@ import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
+  Browsers,
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import QRCode from 'qrcode';
 import qrcodeTerminal from 'qrcode-terminal';
 import http from 'node:http';
 import fs from 'node:fs';
+import path from 'node:path';
 
 // Configuration
 const PORT = parseInt(process.env.WHATSAPP_PORT || '3001', 10);
@@ -80,7 +82,6 @@ async function askAntigravity(jid: string, userText: string): Promise<string> {
   let history = conversationHistory.get(jid) || [];
   history.push({ role: 'user', content: userText });
 
-  // Limit history window
   if (history.length > MAX_HISTORY_MESSAGES) {
     history = history.slice(-MAX_HISTORY_MESSAGES);
   }
@@ -114,7 +115,6 @@ async function askAntigravity(jid: string, userText: string): Promise<string> {
   const assistantReply =
     data.choices?.[0]?.message?.content || data.response || "Désolé, aucune réponse générée.";
 
-  // Save assistant reply to context
   history.push({ role: 'assistant', content: assistantReply });
   if (history.length > MAX_HISTORY_MESSAGES) {
     history = history.slice(-MAX_HISTORY_MESSAGES);
@@ -147,10 +147,186 @@ function splitMessage(text: string, maxLength = 3800): string[] {
   return chunks;
 }
 
-// Connect to WhatsApp
-async function connectToWhatsApp() {
+// Register incoming message handlers on a socket instance
+function registerMessageHandler(s: ReturnType<typeof makeWASocket>) {
+  s.ev.on('messages.upsert', async (m) => {
+    if (m.type !== 'notify') return;
+
+    for (const msg of m.messages) {
+      const isFromMe = msg.key.fromMe ?? false;
+      const jid = msg.key.remoteJid;
+      if (!jid || jid.endsWith('@broadcast')) continue;
+
+      const isGroup = jid.endsWith('@g.us');
+      const senderJid = isGroup ? msg.key.participant || '' : jid;
+      const senderPhone = senderJid.split('@')[0].split(':')[0].replace(/\D/g, '');
+
+      if (ALLOWED_NUMBERS.length > 0 && !ALLOWED_NUMBERS.includes(senderPhone)) {
+        logger.info(`Message ignoré du numéro non autorisé: +${senderPhone}`);
+        continue;
+      }
+
+      const text =
+        msg.message?.conversation ||
+        msg.message?.extendedTextMessage?.text ||
+        msg.message?.imageMessage?.caption ||
+        '';
+
+      const trimmedText = text.trim();
+      if (!trimmedText) continue;
+
+      if (isGroup) {
+        const myJid = s?.user?.id?.split(':')[0] + '@s.whatsapp.net';
+        const mentionedMe = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.includes(myJid);
+        const hasPrefix = trimmedText.startsWith('!ai ') || trimmedText.startsWith('!claude ') || trimmedText.startsWith('/ai ');
+        if (!mentionedMe && !hasPrefix) continue;
+      }
+
+      if (isFromMe && !isGroup) {
+        if (!trimmedText.startsWith('!ai ') && !trimmedText.startsWith('!claude ') && !trimmedText.startsWith('! ') && !trimmedText.startsWith('/ai ')) {
+          continue;
+        }
+      }
+
+      let cleanPrompt = trimmedText
+        .replace(/^(!ai|!claude|\/ai)\s+/i, '')
+        .replace(/^!\s*/, '')
+        .trim();
+
+      if (cleanPrompt === '/clear' || cleanPrompt === '!clear' || cleanPrompt === '!reset') {
+        conversationHistory.delete(jid);
+        await s?.sendMessage(jid, { text: '🧹 *Historique de discussion réinitialisé avec succès !*' }, { quoted: msg });
+        continue;
+      }
+
+      if (cleanPrompt === '/help' || cleanPrompt === '!help') {
+        const helpMsg = `🤖 *Antigravity IA (Claude Sonnet 4.6)*
+
+*Commandes disponibles :*
+• Envoyez n'importe quel message pour discuter avec l'IA.
+• \`/clear\` : Réinitialise la mémoire de la conversation.
+• \`/help\` : Affiche cette aide.
+
+_Vos discussions sont sécurisées et traitées directement sur votre serveur privé._`;
+        await s?.sendMessage(jid, { text: helpMsg }, { quoted: msg });
+        continue;
+      }
+
+      logger.info(`Message reçu de +${senderPhone} : "${cleanPrompt.slice(0, 50)}..."`);
+
+      try {
+        await s?.sendPresenceUpdate('composing', jid);
+        const reply = await askAntigravity(jid, cleanPrompt);
+        await s?.sendPresenceUpdate('paused', jid);
+
+        const chunks = splitMessage(reply);
+        for (const chunk of chunks) {
+          await s?.sendMessage(jid, { text: chunk }, { quoted: msg });
+        }
+      } catch (err: any) {
+        logger.error(err, 'Erreur traitement message');
+        await s?.sendPresenceUpdate('paused', jid);
+        await s?.sendMessage(
+          jid,
+          { text: `⚠️ *Erreur Antigravity* : ${err.message || 'Le serveur n\'a pas pu répondre.'}` },
+          { quoted: msg }
+        );
+      }
+    }
+  });
+}
+
+// Request pairing code with clean fresh auth state (No camera required)
+async function initPairingMode(phone: string): Promise<string> {
+  const cleanPhone = phone.replace(/\D/g, '');
+  logger.info(`Initialisation du mode code d'association pour +${cleanPhone}...`);
+
+  // Close active socket if any
+  try {
+    sock?.ws?.close();
+  } catch (_) {}
+
+  // Clean auth folder to avoid key conflicts
+  try {
+    fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+    fs.mkdirSync(AUTH_DIR, { recursive: true });
+  } catch (_) {}
+
+  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+  const { version } = await fetchLatestBaileysVersion();
+
   connectionStatus = 'connecting';
+  currentQR = null;
+  currentQRDataUrl = null;
   currentPairingCode = null;
+
+  sock = makeWASocket({
+    version,
+    auth: state,
+    printQRInTerminal: false,
+    logger: pino({ level: 'silent' }),
+    browser: Browsers.ubuntu('Chrome'),
+  });
+
+  sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('connection.update', (update) => {
+    const { connection, lastDisconnect } = update;
+    if (connection === 'close') {
+      const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
+      logger.warn(`Connexion fermée. Statut: ${statusCode}`);
+      connectionStatus = 'disconnected';
+      if (statusCode !== DisconnectReason.loggedOut) {
+        setTimeout(connectToWhatsApp, 4000);
+      }
+    } else if (connection === 'open') {
+      currentQR = null;
+      currentQRDataUrl = null;
+      currentPairingCode = null;
+      connectionStatus = 'connected';
+      const id = sock?.user?.id || '';
+      connectedPhone = id.split(':')[0].split('@')[0];
+      logger.info(`✅ Connecté à WhatsApp avec succès ! Numéro : +${connectedPhone}`);
+      console.log(`\n✅ Connecté à WhatsApp avec succès ! Numéro associé : +${connectedPhone}\n`);
+    }
+  });
+
+  registerMessageHandler(sock);
+
+  // Wait 4 seconds for WebSocket handshake to be ready
+  await new Promise((resolve) => setTimeout(resolve, 4000));
+
+  const code = await sock.requestPairingCode(cleanPhone);
+  currentPairingCode = code;
+  logger.info(`🔑 Code d'association généré pour +${cleanPhone} : ${code}`);
+  console.log(`\n======================================================`);
+  console.log(`🔑 CODE D'ASSOCIATION POUR LE NUMÉRO +${cleanPhone} : ${code}`);
+  console.log(`======================================================\n`);
+  return code;
+}
+
+// Connect to WhatsApp (normal or QR mode)
+async function connectToWhatsApp() {
+  // If phone number is configured via environment variable and not registered, use pairing mode directly
+  const credsFile = path.join(AUTH_DIR, 'creds.json');
+  let isRegistered = false;
+  if (fs.existsSync(credsFile)) {
+    try {
+      const creds = JSON.parse(fs.readFileSync(credsFile, 'utf-8'));
+      isRegistered = !!creds.registered;
+    } catch (_) {}
+  }
+
+  if (PAIRING_PHONE && !isRegistered) {
+    try {
+      await initPairingMode(PAIRING_PHONE);
+      return;
+    } catch (err: any) {
+      logger.error(err, 'Erreur initPairingMode sur PAIRING_PHONE');
+    }
+  }
+
+  connectionStatus = 'connecting';
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
 
@@ -161,29 +337,11 @@ async function connectToWhatsApp() {
     auth: state,
     printQRInTerminal: false,
     logger: pino({ level: 'silent' }),
-    browser: ['Ubuntu', 'Chrome', '124.0.0.0'],
+    browser: Browsers.ubuntu('Chrome'),
     generateHighQualityLinkPreview: true,
   });
 
   sock.ev.on('creds.update', saveCreds);
-
-  // If phone number is configured via environment variable and not registered, auto request pairing code
-  if (PAIRING_PHONE && !state.creds.registered) {
-    setTimeout(async () => {
-      try {
-        if (sock && !sock.authState.creds.registered) {
-          logger.info(`Demande automatique de code d'association pour +${PAIRING_PHONE}...`);
-          const code = await sock.requestPairingCode(PAIRING_PHONE);
-          currentPairingCode = code;
-          console.log('\n======================================================');
-          console.log(`🔑 CODE D'ASSOCIATION POUR LE NUMÉRO +${PAIRING_PHONE} : ${code}`);
-          console.log('======================================================\n');
-        }
-      } catch (err: any) {
-        logger.error(err, 'Erreur auto requestPairingCode');
-      }
-    }, 3500);
-  }
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
@@ -198,16 +356,14 @@ async function connectToWhatsApp() {
       }
       console.log('\n======================================================');
       console.log('📱 SCANNEZ LE QR CODE CI-DESSOUS DANS WHATSAPP :');
-      console.log('(Ou utilisez l\'association sans caméra par code à 8 chiffres)');
       console.log('======================================================\n');
       qrcodeTerminal.generate(qr, { small: true });
-      console.log('\nAccédez à l\'interface : http://<VOTRE-SERVEUR>:3000/whatsapp/\n');
+      console.log('\nOu utilisez l\'association sans caméra : http://<VOTRE-SERVEUR>:3000/whatsapp/\n');
     }
 
     if (connection === 'close') {
       currentQR = null;
       currentQRDataUrl = null;
-      currentPairingCode = null;
       connectionStatus = 'disconnected';
       const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
@@ -215,7 +371,6 @@ async function connectToWhatsApp() {
       logger.warn(`Connexion WhatsApp interrompue. Statut: ${statusCode}. Reconnexion: ${shouldReconnect}`);
 
       if (statusCode === DisconnectReason.loggedOut) {
-        logger.warn('Déconnecté de WhatsApp par l\'utilisateur. Nettoyage des identifiants...');
         try {
           fs.rmSync(AUTH_DIR, { recursive: true, force: true });
           fs.mkdirSync(AUTH_DIR, { recursive: true });
@@ -239,96 +394,7 @@ async function connectToWhatsApp() {
     }
   });
 
-  // Handle incoming messages
-  sock.ev.on('messages.upsert', async (m) => {
-    if (m.type !== 'notify') return;
-
-    for (const msg of m.messages) {
-      const isFromMe = msg.key.fromMe ?? false;
-      const jid = msg.key.remoteJid;
-      if (!jid || jid.endsWith('@broadcast')) continue;
-
-      const isGroup = jid.endsWith('@g.us');
-      const senderJid = isGroup ? msg.key.participant || '' : jid;
-      const senderPhone = senderJid.split('@')[0].split(':')[0].replace(/\D/g, '');
-
-      // Security: Allowed numbers filter
-      if (ALLOWED_NUMBERS.length > 0 && !ALLOWED_NUMBERS.includes(senderPhone)) {
-        logger.info(`Message ignoré du numéro non autorisé: +${senderPhone}`);
-        continue;
-      }
-
-      const text =
-        msg.message?.conversation ||
-        msg.message?.extendedTextMessage?.text ||
-        msg.message?.imageMessage?.caption ||
-        '';
-
-      const trimmedText = text.trim();
-      if (!trimmedText) continue;
-
-      // Group trigger rules: only respond if mentioned or starts with !ai or !claude
-      if (isGroup) {
-        const myJid = sock?.user?.id?.split(':')[0] + '@s.whatsapp.net';
-        const mentionedMe = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.includes(myJid);
-        const hasPrefix = trimmedText.startsWith('!ai ') || trimmedText.startsWith('!claude ') || trimmedText.startsWith('/ai ');
-        if (!mentionedMe && !hasPrefix) continue;
-      }
-
-      // Handle message to self (Discuter avec soi-même)
-      if (isFromMe && !isGroup) {
-        if (!trimmedText.startsWith('!ai ') && !trimmedText.startsWith('!claude ') && !trimmedText.startsWith('! ') && !trimmedText.startsWith('/ai ')) {
-          continue;
-        }
-      }
-
-      let cleanPrompt = trimmedText
-        .replace(/^(!ai|!claude|\/ai)\s+/i, '')
-        .replace(/^!\s*/, '')
-        .trim();
-
-      // Special Commands
-      if (cleanPrompt === '/clear' || cleanPrompt === '!clear' || cleanPrompt === '!reset') {
-        conversationHistory.delete(jid);
-        await sock?.sendMessage(jid, { text: '🧹 *Historique de discussion réinitialisé avec succès !*' }, { quoted: msg });
-        continue;
-      }
-
-      if (cleanPrompt === '/help' || cleanPrompt === '!help') {
-        const helpMsg = `🤖 *Antigravity IA (Claude Sonnet 4.6)*
-
-*Commandes disponibles :*
-• Envoyez n'importe quel message pour discuter avec l'IA.
-• \`/clear\` : Réinitialise la mémoire de la conversation.
-• \`/help\` : Affiche cette aide.
-
-_Vos discussions sont sécurisées et traitées directement sur votre serveur privé._`;
-        await sock?.sendMessage(jid, { text: helpMsg }, { quoted: msg });
-        continue;
-      }
-
-      logger.info(`Message reçu de +${senderPhone} : "${cleanPrompt.slice(0, 50)}..."`);
-
-      try {
-        await sock?.sendPresenceUpdate('composing', jid);
-        const reply = await askAntigravity(jid, cleanPrompt);
-        await sock?.sendPresenceUpdate('paused', jid);
-
-        const chunks = splitMessage(reply);
-        for (const chunk of chunks) {
-          await sock?.sendMessage(jid, { text: chunk }, { quoted: msg });
-        }
-      } catch (err: any) {
-        logger.error(err, `Erreur traitement message`);
-        await sock?.sendPresenceUpdate('paused', jid);
-        await sock?.sendMessage(
-          jid,
-          { text: `⚠️ *Erreur Antigravity* : ${err.message || 'Le serveur n\'a pas pu répondre.'}` },
-          { quoted: msg }
-        );
-      }
-    }
-  });
+  registerMessageHandler(sock);
 }
 
 // Web UI & API server
@@ -364,15 +430,7 @@ const server = http.createServer((req, res) => {
           res.end(JSON.stringify({ error: 'Veuillez saisir un numéro valide avec l\'indicatif pays (ex: 33612345678).' }));
           return;
         }
-        if (!sock) {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Service WhatsApp non connecté.' }));
-          return;
-        }
-        logger.info(`Demande de code d'association sans caméra pour +${phone}...`);
-        const code = await sock.requestPairingCode(phone);
-        currentPairingCode = code;
-        logger.info(`Code d'association généré: ${code}`);
+        const code = await initPairingMode(phone);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true, code }));
       } catch (err: any) {
@@ -451,7 +509,7 @@ const server = http.createServer((req, res) => {
             <input 
               id="phone-input" 
               type="tel" 
-              placeholder="Ex: 33612345678" 
+              placeholder="Ex: 33766817354" 
               class="w-full px-3.5 py-2.5 bg-[#0c0e15] border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-emerald-500 font-mono tracking-wider"
               required 
             />
@@ -549,7 +607,7 @@ const server = http.createServer((req, res) => {
       const phone = document.getElementById('phone-input').value.trim();
       const btn = document.getElementById('code-submit-btn');
       btn.disabled = true;
-      btn.innerText = 'Génération en cours...';
+      btn.innerText = 'Connexion à WhatsApp & génération...';
 
       try {
         const res = await fetch('/whatsapp/api/pairing-code', {
@@ -574,7 +632,7 @@ const server = http.createServer((req, res) => {
     }
 
     function copyPairingCode() {
-      const code = document.getElementById('pairing-code-text').innerText.replace(/\s*-\s*/, '');
+      const code = document.getElementById('pairing-code-text').innerText.replace(/\\s*-\\s*/, '');
       navigator.clipboard.writeText(code);
       alert('Code ' + code + ' copié dans le presse-papier !');
     }
