@@ -16,11 +16,20 @@ const PORT = parseInt(process.env.WHATSAPP_PORT || '3001', 10);
 const BACKEND_URL = process.env.BACKEND_URL || 'http://backend:8080';
 let API_KEY = process.env.API_KEY || '';
 const AUTH_DIR = process.env.AUTH_DIR || './auth_info_baileys';
+function normalizePhoneNumber(input: string): string {
+  let cleaned = (input || '').toString().trim().replace(/\D/g, '');
+  // Automatic conversion for French national numbers (e.g. 06..., 07...) -> 336..., 337...
+  if (cleaned.length === 10 && cleaned.startsWith('0')) {
+    cleaned = '33' + cleaned.slice(1);
+  }
+  return cleaned;
+}
+
 const ALLOWED_NUMBERS = (process.env.ALLOWED_NUMBERS || '')
   .split(',')
-  .map((n) => n.trim().replace(/\D/g, ''))
+  .map(normalizePhoneNumber)
   .filter((n) => n.length > 0);
-const PAIRING_PHONE = (process.env.PAIRING_PHONE || process.env.PHONE_NUMBER || '').replace(/\D/g, '');
+const PAIRING_PHONE = normalizePhoneNumber(process.env.PAIRING_PHONE || process.env.PHONE_NUMBER || '');
 
 const SYSTEM_PROMPT =
   process.env.SYSTEM_PROMPT ||
@@ -399,10 +408,10 @@ const server = http.createServer((req, res) => {
     req.on('end', async () => {
       try {
         const data = JSON.parse(body || '{}');
-        const phone = (data.phoneNumber || '').toString().replace(/\D/g, '');
+        const phone = normalizePhoneNumber(data.phoneNumber || '');
         if (!phone || phone.length < 8) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Veuillez saisir un numéro valide avec l\'indicatif pays (ex: 33766817354).' }));
+          res.end(JSON.stringify({ error: 'Veuillez saisir un numéro valide (ex: 0766817354 ou 33766817354).' }));
           return;
         }
         const code = await startWhatsApp(phone);
@@ -479,11 +488,11 @@ const server = http.createServer((req, res) => {
 
         <form onsubmit="requestCode(event)" class="space-y-3 mb-4">
           <div>
-            <label class="block text-[11px] font-medium text-slate-400 mb-1">Votre numéro (avec indicatif pays, sans +)</label>
+            <label class="block text-[11px] font-medium text-slate-400 mb-1">Votre numéro mobile (ex: 07 66 81 73 54 ou 33766817354)</label>
             <input 
               id="phone-input" 
               type="tel" 
-              placeholder="Ex: 33766817354" 
+              placeholder="07 66 81 73 54 ou 33766817354" 
               class="w-full px-3.5 py-2.5 bg-[#0c0e15] border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-emerald-500 font-mono tracking-wider"
               required 
             />
@@ -576,9 +585,18 @@ const server = http.createServer((req, res) => {
       }
     }
 
+    function normalizePhone(val) {
+      let c = (val || '').toString().trim().replace(/\D/g, '');
+      if (c.length === 10 && c.startsWith('0')) {
+        c = '33' + c.slice(1);
+      }
+      return c;
+    }
+
     async function requestCode(e) {
       e.preventDefault();
-      const phone = document.getElementById('phone-input').value.trim();
+      const rawInput = document.getElementById('phone-input').value;
+      const phone = normalizePhone(rawInput);
       const btn = document.getElementById('code-submit-btn');
       btn.disabled = true;
       btn.innerText = 'Établissement de la connexion... (~4 sec)';
