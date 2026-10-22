@@ -71,6 +71,9 @@ services:
       - AUTH_DIR=/app/auth_info_baileys
       - ALLOWED_NUMBERS=${ALLOWED_NUMBERS:-}
       - SYSTEM_PROMPT=${SYSTEM_PROMPT:-}
+      - META_ACCESS_TOKEN=${META_ACCESS_TOKEN:-}
+      - META_PHONE_NUMBER_ID=${META_PHONE_NUMBER_ID:-}
+      - META_VERIFY_TOKEN=${META_VERIFY_TOKEN:-antigravity_token}
     volumes:
       - whatsapp_auth:/app/auth_info_baileys
     depends_on:

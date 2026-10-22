@@ -31,6 +31,44 @@ const ALLOWED_NUMBERS = (process.env.ALLOWED_NUMBERS || '')
   .filter((n) => n.length > 0);
 const PAIRING_PHONE = normalizePhoneNumber(process.env.PAIRING_PHONE || process.env.PHONE_NUMBER || '');
 
+let META_ACCESS_TOKEN = process.env.META_ACCESS_TOKEN || '';
+let META_PHONE_NUMBER_ID = process.env.META_PHONE_NUMBER_ID || '';
+let META_VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || 'antigravity_token';
+
+// Send message via Meta WhatsApp Cloud API (Graph API)
+async function sendMetaWhatsAppMessage(toPhone: string, text: string) {
+  if (!META_ACCESS_TOKEN || !META_PHONE_NUMBER_ID) {
+    logger.warn('Meta credentials non configurés (META_ACCESS_TOKEN ou META_PHONE_NUMBER_ID)');
+    return;
+  }
+  const cleanPhone = normalizePhoneNumber(toPhone);
+  const chunks = splitMessage(text, 4000);
+  for (const chunk of chunks) {
+    try {
+      const res = await fetch(`https://graph.facebook.com/v20.0/${META_PHONE_NUMBER_ID}/messages`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${META_ACCESS_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: cleanPhone,
+          type: 'text',
+          text: { preview_url: false, body: chunk },
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        logger.error({ err }, 'Erreur envoi message Meta Graph API');
+      }
+    } catch (e: any) {
+      logger.error(e, 'Exception envoi message Meta Graph API');
+    }
+  }
+}
+
 const SYSTEM_PROMPT =
   process.env.SYSTEM_PROMPT ||
   `Tu es Antigravity, un assistant IA expert propulsé par Claude Sonnet 4.6. 
@@ -387,7 +425,7 @@ async function startWhatsApp(pairingNumber?: string): Promise<string | undefined
 const server = http.createServer((req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
-  // API Status endpoint
+  // Status API endpoint
   if (url.pathname === '/api/status' || url.pathname === '/whatsapp/api/status') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(
@@ -398,8 +436,44 @@ const server = http.createServer((req, res) => {
         qr: currentQRDataUrl,
         pairingCode: currentPairingCode,
         allowedNumbers: ALLOWED_NUMBERS,
+        meta: {
+          configured: !!(META_ACCESS_TOKEN && META_PHONE_NUMBER_ID),
+          phoneNumberId: META_PHONE_NUMBER_ID,
+          verifyToken: META_VERIFY_TOKEN,
+        },
       })
     );
+    return;
+  }
+
+  // Meta Cloud API configuration endpoint
+  if ((url.pathname === '/api/meta-config' || url.pathname === '/whatsapp/api/meta-config') && req.method === 'POST') {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body || '{}');
+        if (typeof data.accessToken === 'string') {
+          META_ACCESS_TOKEN = data.accessToken.trim();
+        }
+        if (typeof data.phoneNumberId === 'string') {
+          META_PHONE_NUMBER_ID = data.phoneNumberId.trim();
+        }
+        if (typeof data.verifyToken === 'string' && data.verifyToken.trim()) {
+          META_VERIFY_TOKEN = data.verifyToken.trim();
+        }
+        logger.info({ configured: !!(META_ACCESS_TOKEN && META_PHONE_NUMBER_ID) }, 'Configuration Meta Cloud API mise à jour');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: true,
+          configured: !!(META_ACCESS_TOKEN && META_PHONE_NUMBER_ID),
+          phoneNumberId: META_PHONE_NUMBER_ID,
+        }));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
     return;
   }
 
@@ -440,6 +514,60 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Meta Webhook Verification (GET)
+  if (req.method === 'GET' && (url.pathname === '/meta/webhook' || url.pathname === '/whatsapp/meta/webhook')) {
+    const mode = url.searchParams.get('hub.mode');
+    const token = url.searchParams.get('hub.verify_token');
+    const challenge = url.searchParams.get('hub.challenge');
+
+    if (mode === 'subscribe' && token === META_VERIFY_TOKEN) {
+      logger.info('✅ Webhook Meta Cloud API vérifié avec succès !');
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end(challenge || '');
+      return;
+    } else {
+      logger.warn(`Échec vérification webhook Meta: token '${token}' != '${META_VERIFY_TOKEN}'`);
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end('Forbidden');
+      return;
+    }
+  }
+
+  // Meta Webhook Events (POST)
+  if (req.method === 'POST' && (url.pathname === '/meta/webhook' || url.pathname === '/whatsapp/meta/webhook')) {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', async () => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok' }));
+
+      try {
+        const payload = JSON.parse(body || '{}');
+        const entry = payload.entry?.[0];
+        const change = entry?.changes?.[0];
+        const value = change?.value;
+        const message = value?.messages?.[0];
+
+        if (message && message.type === 'text') {
+          const fromPhone = message.from;
+          const userText = message.text?.body || '';
+
+          if (ALLOWED_NUMBERS.length > 0 && !ALLOWED_NUMBERS.includes(normalizePhoneNumber(fromPhone))) {
+            logger.info(`Message Meta ignoré de +${fromPhone} (non autorisé)`);
+            return;
+          }
+
+          logger.info(`Message reçu via Meta Cloud API de +${fromPhone}: "${userText.slice(0, 50)}..."`);
+          const reply = await askAntigravity(fromPhone, userText);
+          await sendMetaWhatsAppMessage(fromPhone, reply);
+        }
+      } catch (err: any) {
+        logger.error(err, 'Erreur traitement webhook Meta');
+      }
+    });
+    return;
+  }
+
   // HTML page
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(`<!DOCTYPE html>
@@ -447,48 +575,154 @@ const server = http.createServer((req, res) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Antigravity WhatsApp Bridge</title>
+  <title>Antigravity WhatsApp Hub</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     body { background-color: #0c0e15; color: #f1f5f9; font-family: system-ui, -apple-system, sans-serif; }
   </style>
 </head>
 <body class="min-h-screen flex items-center justify-center p-4">
-  <div class="max-w-md w-full bg-[#131622] border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl text-center">
-    <div class="w-16 h-16 bg-gradient-to-tr from-emerald-500 to-teal-400 rounded-2xl mx-auto flex items-center justify-center text-3xl shadow-lg shadow-emerald-500/20 mb-4">
-      💬
-    </div>
-    <h1 class="text-2xl font-bold tracking-tight text-white mb-1">WhatsApp & Antigravity</h1>
-    <p class="text-slate-400 text-sm mb-6">Associez votre WhatsApp à Claude Sonnet 4.6</p>
-
-    <!-- Tab navigation -->
-    <div id="tab-nav" class="flex p-1 bg-[#0c0e15] border border-slate-800 rounded-2xl mb-5">
-      <button id="tab-code-btn" onclick="setTab('code')" class="flex-1 py-2 text-xs font-semibold rounded-xl transition bg-emerald-600 text-white shadow-sm flex items-center justify-center gap-1.5 cursor-pointer">
-        <span>🔢 Sans caméra (Code)</span>
-      </button>
-      <button id="tab-qr-btn" onclick="setTab('qr')" class="flex-1 py-2 text-xs font-semibold rounded-xl transition text-slate-400 hover:text-white flex items-center justify-center gap-1.5 cursor-pointer">
-        <span>📷 Scanner QR Code</span>
-      </button>
+  <div class="max-w-xl w-full bg-[#131622] border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl">
+    <div class="text-center mb-6">
+      <div class="w-16 h-16 bg-gradient-to-tr from-emerald-500 to-teal-400 rounded-2xl mx-auto flex items-center justify-center text-3xl shadow-lg shadow-emerald-500/20 mb-3">
+        💬
+      </div>
+      <h1 class="text-2xl font-bold tracking-tight text-white mb-1">WhatsApp & Antigravity</h1>
+      <p class="text-slate-400 text-sm">Connectez Claude Sonnet 4.6 à WhatsApp</p>
     </div>
 
-    <div id="status-card" class="bg-[#1a1e2e] border border-slate-700/60 rounded-2xl p-5 mb-6">
+    <!-- Navigation Tabs -->
+    <div id="tab-nav" class="grid grid-cols-3 p-1 bg-[#0c0e15] border border-slate-800 rounded-2xl mb-6 gap-1 text-center">
+      <button id="tab-meta-btn" onclick="setTab('meta')" class="py-2.5 px-2 text-xs font-semibold rounded-xl transition bg-emerald-600 text-white shadow-sm flex items-center justify-center gap-1 cursor-pointer">
+        <span>🤖 Meta Chatbot</span>
+      </button>
+      <button id="tab-code-btn" onclick="setTab('code')" class="py-2.5 px-2 text-xs font-semibold rounded-xl transition text-slate-400 hover:text-white flex items-center justify-center gap-1 cursor-pointer">
+        <span>🔢 Code Sans Caméra</span>
+      </button>
+      <button id="tab-qr-btn" onclick="setTab('qr')" class="py-2.5 px-2 text-xs font-semibold rounded-xl transition text-slate-400 hover:text-white flex items-center justify-center gap-1 cursor-pointer">
+        <span>📷 Scanner QR</span>
+      </button>
+    </div>
+
+    <!-- Main Card Body -->
+    <div class="bg-[#1a1e2e] border border-slate-700/60 rounded-2xl p-5 sm:p-6 mb-6">
       
-      <!-- Loading State -->
-      <div id="loading-spinner" class="py-8">
-        <div class="w-10 h-10 border-4 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin mx-auto mb-3"></div>
-        <p class="text-slate-400 text-sm">Initialisation de la passerelle WhatsApp...</p>
+      <!-- ================= TAB 1: META CLOUD API (CHATBOT DÉDIÉ) ================= -->
+      <div id="meta-container" class="space-y-5">
+        <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+          <div>
+            <h3 class="text-sm font-bold text-white flex items-center gap-2">
+              <span>🤖 Chatbot Officiel Meta Cloud API</span>
+            </h3>
+            <p class="text-[11px] text-slate-400">Numéro WhatsApp dédié indépendant de votre téléphone</p>
+          </div>
+          <span id="meta-status-badge" class="px-2.5 py-1 text-[11px] font-medium rounded-full bg-slate-800 text-slate-400 border border-slate-700">
+            Vérification...
+          </span>
+        </div>
+
+        <div class="bg-emerald-950/30 border border-emerald-500/30 rounded-xl p-3.5 text-xs text-emerald-200 leading-relaxed">
+          💡 <strong>Le gros avantage de Meta Cloud API :</strong> Vous n'avez pas besoin de connecter votre téléphone personnel. Meta fournit un numéro de chatbot WhatsApp officiel de test. Vous pouvez lui parler directement sur WhatsApp, sans préfixe !
+        </div>
+
+        <!-- Configuration Webhook Meta -->
+        <div class="bg-[#0c0e15] border border-slate-800 rounded-xl p-4 space-y-3">
+          <p class="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">
+            1. Informations de rappel Webhook (à saisir sur Meta Developers)
+          </p>
+          
+          <div>
+            <label class="block text-[11px] text-slate-400 mb-1">URL de rappel (Callback URL) :</label>
+            <div class="flex gap-2">
+              <input id="meta-webhook-url" readonly type="text" class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs font-mono text-emerald-300 select-all focus:outline-none" />
+              <button onclick="copyToClipboard('meta-webhook-url')" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg transition">
+                Copier
+              </button>
+            </div>
+            <p class="text-[10px] text-slate-500 mt-1">⚠️ Meta exige une URL HTTPS publique (votre nom de domaine ou un tunnel Cloudflare / ngrok).</p>
+          </div>
+
+          <div>
+            <label class="block text-[11px] text-slate-400 mb-1">Jeton de vérification (Verify Token) :</label>
+            <div class="flex gap-2">
+              <input id="meta-verify-token" readonly value="antigravity_token" type="text" class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs font-mono text-emerald-300 select-all focus:outline-none" />
+              <button onclick="copyToClipboard('meta-verify-token')" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg transition">
+                Copier
+              </button>
+            </div>
+          </div>
+
+          <div class="text-[11px] text-slate-400 bg-slate-900/60 p-2.5 rounded-lg border border-slate-800">
+            ℹ️ Dans Meta Developers &gt; WhatsApp &gt; Configuration Webhook, abonnez-vous au champ <strong class="text-white">messages</strong>.
+          </div>
+        </div>
+
+        <!-- Meta Credentials Form -->
+        <form onsubmit="saveMetaConfig(event)" class="space-y-3">
+          <p class="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">
+            2. Vos identifiants Meta Cloud API
+          </p>
+
+          <div>
+            <label class="block text-[11px] font-medium text-slate-400 mb-1">Jeton d'accès (Temporary or Permanent Access Token) :</label>
+            <input 
+              id="meta-access-token" 
+              type="password" 
+              placeholder="EAAG..." 
+              class="w-full px-3.5 py-2 bg-[#0c0e15] border border-slate-700 rounded-xl text-white text-xs font-mono focus:outline-none focus:border-emerald-500"
+              required 
+            />
+          </div>
+
+          <div>
+            <label class="block text-[11px] font-medium text-slate-400 mb-1">ID de numéro de téléphone (Phone Number ID) :</label>
+            <input 
+              id="meta-phone-id" 
+              type="text" 
+              placeholder="Ex: 532187654321..." 
+              class="w-full px-3.5 py-2 bg-[#0c0e15] border border-slate-700 rounded-xl text-white text-xs font-mono focus:outline-none focus:border-emerald-500"
+              required 
+            />
+          </div>
+
+          <button 
+            id="meta-save-btn" 
+            type="submit" 
+            class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl shadow-lg shadow-emerald-600/20 transition cursor-pointer"
+          >
+            Enregistrer la configuration Meta
+          </button>
+        </form>
+
+        <div class="bg-black/30 p-3 rounded-xl border border-slate-800 text-[11px] text-slate-400 space-y-1">
+          <p class="font-semibold text-slate-300">Comment obtenir ces clés gratuites sur Meta :</p>
+          <p>1. Allez sur <a href="https://developers.facebook.com" target="_blank" class="text-emerald-400 underline">developers.facebook.com</a> et connectez-vous.</p>
+          <p>2. Créez une application &gt; type <strong>Autre / Entreprise</strong> &gt; ajoutez le produit <strong>WhatsApp</strong>.</p>
+          <p>3. Dans <strong>Démarrage rapide</strong>, copiez le Jeton et l'ID du numéro de téléphone.</p>
+          <p>4. Ajoutez votre propre numéro dans le champ d'envoi de test (« À ») pour autoriser la réception.</p>
+        </div>
       </div>
 
-      <!-- TAB 1: PAIRING CODE (NO CAMERA NEEDED) -->
-      <div id="code-container" class="hidden text-left">
-        <p class="text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-2 text-center">
+      <!-- ================= TAB 2: CODE (BAILEYS SANS CAMÉRA) ================= -->
+      <div id="code-container" class="hidden space-y-4 text-left">
+        <div id="baileys-status-banner" class="hidden bg-emerald-950/40 border border-emerald-500/30 rounded-xl p-3 flex items-center justify-between">
+          <div>
+            <p class="text-xs font-bold text-emerald-400">✅ Connecté à WhatsApp</p>
+            <p id="baileys-connected-phone" class="text-xs text-slate-300 font-mono"></p>
+          </div>
+          <button onclick="logout()" class="px-3 py-1.5 bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 text-xs rounded-lg transition border border-rose-500/30">
+            Déconnecter
+          </button>
+        </div>
+
+        <p class="text-xs font-semibold text-emerald-400 uppercase tracking-wider text-center">
           Connexion sans caméra par code à 8 chiffres
         </p>
-        <p class="text-xs text-slate-300 mb-4 leading-relaxed text-center">
+        <p class="text-xs text-slate-300 leading-relaxed text-center">
           Entrez votre numéro WhatsApp pour générer un code d'association à saisir directement dans l'application.
         </p>
 
-        <form onsubmit="requestCode(event)" class="space-y-3 mb-4">
+        <form onsubmit="requestCode(event)" class="space-y-3">
           <div>
             <label class="block text-[11px] font-medium text-slate-400 mb-1">Votre numéro mobile (ex: 07 66 81 73 54 ou 33766817354)</label>
             <input 
@@ -508,7 +742,7 @@ const server = http.createServer((req, res) => {
           </button>
         </form>
 
-        <div id="code-display" class="hidden bg-[#0c0e15] border border-emerald-500/40 rounded-2xl p-4 text-center mb-4">
+        <div id="code-display" class="hidden bg-[#0c0e15] border border-emerald-500/40 rounded-2xl p-4 text-center">
           <p class="text-[11px] text-slate-400 uppercase tracking-wider mb-1">Votre code d'association</p>
           <div class="flex items-center justify-center gap-3 my-2">
             <span id="pairing-code-text" class="text-2xl font-mono font-extrabold tracking-widest text-emerald-300"></span>
@@ -528,10 +762,10 @@ const server = http.createServer((req, res) => {
         </div>
       </div>
 
-      <!-- TAB 2: QR CODE -->
-      <div id="qr-container" class="hidden">
-        <p class="text-xs uppercase font-semibold text-emerald-400 tracking-wider mb-3">Scannez avec votre téléphone</p>
-        <div class="bg-white p-3 rounded-2xl inline-block shadow-xl mb-4">
+      <!-- ================= TAB 3: SCAN QR (BAILEYS) ================= -->
+      <div id="qr-container" class="hidden text-center space-y-4">
+        <p class="text-xs uppercase font-semibold text-emerald-400 tracking-wider">Scannez avec votre téléphone</p>
+        <div class="bg-white p-3 rounded-2xl inline-block shadow-xl">
           <img id="qr-image" src="" alt="QR Code WhatsApp" class="w-56 h-56 mx-auto object-contain" />
         </div>
         <ol class="text-left text-xs text-slate-300 space-y-1.5 bg-black/30 p-3.5 rounded-xl border border-slate-800">
@@ -542,53 +776,75 @@ const server = http.createServer((req, res) => {
         </ol>
       </div>
 
-      <!-- CONNECTED STATE -->
-      <div id="connected-container" class="hidden py-4">
-        <div class="w-12 h-12 bg-emerald-500/20 text-emerald-400 rounded-full flex items-center justify-center mx-auto mb-3 text-2xl">
-          ✓
-        </div>
-        <h3 class="text-lg font-semibold text-white">Connecté avec succès !</h3>
-        <p id="connected-phone" class="text-emerald-400 font-mono text-sm mt-1 mb-4"></p>
-        <p class="text-xs text-slate-400 leading-relaxed">
-          Votre bot est en ligne. Envoyez un message WhatsApp à ce compte (ou écrivez à vous-même) pour discuter avec Claude !
-        </p>
-        <button onclick="logout()" class="mt-5 px-4 py-2 bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 text-xs rounded-xl transition border border-rose-500/30 cursor-pointer">
-          Déconnecter cet appareil
-        </button>
-      </div>
     </div>
 
     <div class="flex items-center justify-between text-xs text-slate-500 border-t border-slate-800/80 pt-4">
-      <span>Moteur: Claude Sonnet 4.6</span>
+      <span>Moteur : Claude Sonnet 4.6</span>
       <a href="/" class="text-indigo-400 hover:underline">← Retour à l'interface Web</a>
     </div>
   </div>
 
   <script>
-    let activeTab = 'code';
+    let activeTab = 'meta';
+
+    // Auto-detect and populate webhook URL
+    const origin = window.location.origin;
+    document.getElementById('meta-webhook-url').value = origin + '/whatsapp/meta/webhook';
 
     function setTab(tab) {
       activeTab = tab;
-      const codeBtn = document.getElementById('tab-code-btn');
-      const qrBtn = document.getElementById('tab-qr-btn');
-      const codeCont = document.getElementById('code-container');
-      const qrCont = document.getElementById('qr-container');
+      const tabs = ['meta', 'code', 'qr'];
+      tabs.forEach(t => {
+        const btn = document.getElementById('tab-' + t + '-btn');
+        const cont = document.getElementById(t + '-container');
+        if (t === tab) {
+          btn.className = 'py-2.5 px-2 text-xs font-semibold rounded-xl transition bg-emerald-600 text-white shadow-sm flex items-center justify-center gap-1 cursor-pointer';
+          cont.classList.remove('hidden');
+        } else {
+          btn.className = 'py-2.5 px-2 text-xs font-semibold rounded-xl transition text-slate-400 hover:text-white flex items-center justify-center gap-1 cursor-pointer';
+          cont.classList.add('hidden');
+        }
+      });
+    }
 
-      if (tab === 'code') {
-        codeBtn.className = 'flex-1 py-2 text-xs font-semibold rounded-xl transition bg-emerald-600 text-white shadow-sm flex items-center justify-center gap-1.5 cursor-pointer';
-        qrBtn.className = 'flex-1 py-2 text-xs font-semibold rounded-xl transition text-slate-400 hover:text-white flex items-center justify-center gap-1.5 cursor-pointer';
-        codeCont.classList.remove('hidden');
-        qrCont.classList.add('hidden');
-      } else {
-        qrBtn.className = 'flex-1 py-2 text-xs font-semibold rounded-xl transition bg-emerald-600 text-white shadow-sm flex items-center justify-center gap-1.5 cursor-pointer';
-        codeBtn.className = 'flex-1 py-2 text-xs font-semibold rounded-xl transition text-slate-400 hover:text-white flex items-center justify-center gap-1.5 cursor-pointer';
-        qrCont.classList.remove('hidden');
-        codeCont.classList.add('hidden');
+    function copyToClipboard(elementId) {
+      const el = document.getElementById(elementId);
+      navigator.clipboard.writeText(el.value);
+      alert('Copié dans le presse-papier !');
+    }
+
+    async function saveMetaConfig(e) {
+      e.preventDefault();
+      const accessToken = document.getElementById('meta-access-token').value;
+      const phoneNumberId = document.getElementById('meta-phone-id').value;
+      const btn = document.getElementById('meta-save-btn');
+
+      btn.disabled = true;
+      btn.innerText = 'Enregistrement...';
+
+      try {
+        const res = await fetch('/whatsapp/api/meta-config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accessToken, phoneNumberId })
+        });
+        const data = await res.json();
+        if (data.success) {
+          alert('✅ Configuration Meta enregistrée avec succès !');
+          updateStatus();
+        } else {
+          alert('Erreur : ' + (data.error || 'Impossible d\\'enregistrer.'));
+        }
+      } catch (err) {
+        alert('Erreur réseau : ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = 'Enregistrer la configuration Meta';
       }
     }
 
     function normalizePhone(val) {
-      let c = (val || '').toString().trim().replace(/\D/g, '');
+      let c = (val || '').toString().trim().replace(/\\D/g, '');
       if (c.length === 10 && c.startsWith('0')) {
         c = '33' + c.slice(1);
       }
@@ -636,34 +892,30 @@ const server = http.createServer((req, res) => {
         const res = await fetch('/whatsapp/api/status');
         const data = await res.json();
         
-        document.getElementById('loading-spinner').classList.add('hidden');
-        
-        if (data.status === 'connected') {
-          document.getElementById('tab-nav').classList.add('hidden');
-          document.getElementById('code-container').classList.add('hidden');
-          document.getElementById('qr-container').classList.add('hidden');
-          document.getElementById('connected-container').classList.remove('hidden');
-          document.getElementById('connected-phone').innerText = '+' + (data.phone || '');
+        // Meta status badge
+        const badge = document.getElementById('meta-status-badge');
+        if (data.meta && data.meta.configured) {
+          badge.className = 'px-2.5 py-1 text-[11px] font-medium rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40';
+          badge.innerText = '🟢 Actif (' + (data.meta.phoneNumberId ? data.meta.phoneNumberId.slice(-4) : 'OK') + ')';
         } else {
-          document.getElementById('tab-nav').classList.remove('hidden');
-          document.getElementById('connected-container').classList.add('hidden');
+          badge.className = 'px-2.5 py-1 text-[11px] font-medium rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40';
+          badge.innerText = '⚠️ Non configuré';
+        }
 
+        // Baileys phone connection
+        const bBanner = document.getElementById('baileys-status-banner');
+        if (data.status === 'connected') {
+          bBanner.classList.remove('hidden');
+          document.getElementById('baileys-connected-phone').innerText = 'Numéro associé : +' + (data.phone || '');
+        } else {
+          bBanner.classList.add('hidden');
           if (data.pairingCode) {
             const formatted = data.pairingCode.length === 8 ? data.pairingCode.slice(0, 4) + ' - ' + data.pairingCode.slice(4) : data.pairingCode;
             document.getElementById('pairing-code-text').innerText = formatted;
             document.getElementById('code-display').classList.remove('hidden');
           }
-
           if (data.hasQr && data.qr) {
             document.getElementById('qr-image').src = data.qr;
-          }
-
-          if (activeTab === 'code') {
-            document.getElementById('code-container').classList.remove('hidden');
-            document.getElementById('qr-container').classList.add('hidden');
-          } else {
-            document.getElementById('qr-container').classList.remove('hidden');
-            document.getElementById('code-container').classList.add('hidden');
           }
         }
       } catch (e) {
@@ -672,7 +924,7 @@ const server = http.createServer((req, res) => {
     }
 
     async function logout() {
-      if (!confirm('Voulez-vous vraiment déconnecter WhatsApp ?')) return;
+      if (!confirm('Voulez-vous vraiment déconnecter votre WhatsApp personnel ?')) return;
       await fetch('/whatsapp/api/logout');
       location.reload();
     }
