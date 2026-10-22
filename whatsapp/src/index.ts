@@ -335,14 +335,16 @@ async function startWhatsApp(pairingNumber?: string): Promise<string | undefined
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
       logger.warn(`Connexion fermée. Statut: ${statusCode}. Reconnexion: ${shouldReconnect}`);
 
-      if (shouldReconnect) {
+      if (statusCode === DisconnectReason.restartRequired || statusCode === 515) {
+        logger.info('Validation WhatsApp réussie (515 restartRequired). Reconnexion immédiate avec les identifiants enregistrés...');
+        currentMode = 'qr';
+        pairingPhoneTarget = null;
         reconnectTimer = setTimeout(() => {
-          // If we had pairing code target, retry with pairing mode
-          if (currentMode === 'pairing' && pairingPhoneTarget) {
-            startWhatsApp(pairingPhoneTarget).catch(() => {});
-          } else {
-            startWhatsApp().catch(() => {});
-          }
+          startWhatsApp().catch(() => {});
+        }, 1500);
+      } else if (shouldReconnect) {
+        reconnectTimer = setTimeout(() => {
+          startWhatsApp().catch(() => {});
         }, 5000);
       }
     } else if (connection === 'open') {
