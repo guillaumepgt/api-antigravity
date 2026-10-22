@@ -40,13 +40,16 @@ interface ChatMessage {
 const conversationHistory = new Map<string, ChatMessage[]>();
 const MAX_HISTORY_MESSAGES = 16;
 
-// Connection state
+// Connection & Socket state
+let sock: ReturnType<typeof makeWASocket> | null = null;
+let currentMode: 'qr' | 'pairing' = PAIRING_PHONE ? 'pairing' : 'qr';
+let pairingPhoneTarget: string | null = PAIRING_PHONE || null;
 let currentQR: string | null = null;
 let currentQRDataUrl: string | null = null;
 let currentPairingCode: string | null = null;
 let connectionStatus: 'disconnected' | 'connecting' | 'qr_ready' | 'connected' = 'disconnected';
 let connectedPhone: string | null = null;
-let sock: ReturnType<typeof makeWASocket> | null = null;
+let reconnectTimer: NodeJS.Timeout | null = null;
 
 const logger = pino({ level: 'info' });
 
@@ -78,7 +81,6 @@ async function ensureApiKey(): Promise<string> {
 async function askAntigravity(jid: string, userText: string): Promise<string> {
   await ensureApiKey();
 
-  // Retrieve or create history for this user
   let history = conversationHistory.get(jid) || [];
   history.push({ role: 'user', content: userText });
 
@@ -236,101 +238,58 @@ _Vos discussions sont sécurisées et traitées directement sur votre serveur pr
   });
 }
 
-// Request pairing code with clean fresh auth state (No camera required)
-async function initPairingMode(phone: string): Promise<string> {
-  const cleanPhone = phone.replace(/\D/g, '');
-  logger.info(`Initialisation du mode code d'association pour +${cleanPhone}...`);
+// Clean contents of auth dir without removing the docker volume mount point (avoids EBUSY)
+function clearAuthDir() {
+  if (fs.existsSync(AUTH_DIR)) {
+    try {
+      const files = fs.readdirSync(AUTH_DIR);
+      for (const file of files) {
+        fs.rmSync(path.join(AUTH_DIR, file), { recursive: true, force: true });
+      }
+    } catch (e: any) {
+      logger.error(e, 'Erreur nettoyage auth dir');
+    }
+  }
+}
 
-  // Close active socket if any
-  try {
-    sock?.ws?.close();
-  } catch (_) {}
+// Cleanly close any previous socket and cancel reconnect timers
+function cleanupOldSocket() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (sock) {
+    try {
+      sock.ev.removeAllListeners('connection.update');
+      sock.ev.removeAllListeners('creds.update');
+      sock.ev.removeAllListeners('messages.upsert');
+      sock.end(undefined);
+    } catch (_) {}
+    sock = null;
+  }
+}
 
-  // Clean auth folder to avoid key conflicts
-  try {
-    fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-    fs.mkdirSync(AUTH_DIR, { recursive: true });
-  } catch (_) {}
+// Single entrance point for starting WhatsApp (QR mode or Pairing mode)
+async function startWhatsApp(pairingNumber?: string): Promise<string | undefined> {
+  cleanupOldSocket();
 
-  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-  const { version } = await fetchLatestBaileysVersion();
+  if (pairingNumber) {
+    currentMode = 'pairing';
+    pairingPhoneTarget = pairingNumber.replace(/\D/g, '');
+    logger.info(`Passage en mode code d'association pour +${pairingPhoneTarget}...`);
+
+    // Clean auth folder to avoid key conflicts
+    clearAuthDir();
+  }
 
   connectionStatus = 'connecting';
   currentQR = null;
   currentQRDataUrl = null;
-  currentPairingCode = null;
 
-  sock = makeWASocket({
-    version,
-    auth: state,
-    printQRInTerminal: false,
-    logger: pino({ level: 'silent' }),
-    browser: Browsers.ubuntu('Chrome'),
-  });
-
-  sock.ev.on('creds.update', saveCreds);
-
-  sock.ev.on('connection.update', (update) => {
-    const { connection, lastDisconnect } = update;
-    if (connection === 'close') {
-      const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
-      logger.warn(`Connexion fermée. Statut: ${statusCode}`);
-      connectionStatus = 'disconnected';
-      if (statusCode !== DisconnectReason.loggedOut) {
-        setTimeout(connectToWhatsApp, 4000);
-      }
-    } else if (connection === 'open') {
-      currentQR = null;
-      currentQRDataUrl = null;
-      currentPairingCode = null;
-      connectionStatus = 'connected';
-      const id = sock?.user?.id || '';
-      connectedPhone = id.split(':')[0].split('@')[0];
-      logger.info(`✅ Connecté à WhatsApp avec succès ! Numéro : +${connectedPhone}`);
-      console.log(`\n✅ Connecté à WhatsApp avec succès ! Numéro associé : +${connectedPhone}\n`);
-    }
-  });
-
-  registerMessageHandler(sock);
-
-  // Wait 4 seconds for WebSocket handshake to be ready
-  await new Promise((resolve) => setTimeout(resolve, 4000));
-
-  const code = await sock.requestPairingCode(cleanPhone);
-  currentPairingCode = code;
-  logger.info(`🔑 Code d'association généré pour +${cleanPhone} : ${code}`);
-  console.log(`\n======================================================`);
-  console.log(`🔑 CODE D'ASSOCIATION POUR LE NUMÉRO +${cleanPhone} : ${code}`);
-  console.log(`======================================================\n`);
-  return code;
-}
-
-// Connect to WhatsApp (normal or QR mode)
-async function connectToWhatsApp() {
-  // If phone number is configured via environment variable and not registered, use pairing mode directly
-  const credsFile = path.join(AUTH_DIR, 'creds.json');
-  let isRegistered = false;
-  if (fs.existsSync(credsFile)) {
-    try {
-      const creds = JSON.parse(fs.readFileSync(credsFile, 'utf-8'));
-      isRegistered = !!creds.registered;
-    } catch (_) {}
-  }
-
-  if (PAIRING_PHONE && !isRegistered) {
-    try {
-      await initPairingMode(PAIRING_PHONE);
-      return;
-    } catch (err: any) {
-      logger.error(err, 'Erreur initPairingMode sur PAIRING_PHONE');
-    }
-  }
-
-  connectionStatus = 'connecting';
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
 
-  logger.info(`Démarrage de la connexion WhatsApp (Baileys v${version.join('.')})...`);
+  logger.info(`Démarrage socket WhatsApp en mode [${currentMode}] (Baileys v${version.join('.')})...`);
 
   sock = makeWASocket({
     version,
@@ -338,7 +297,6 @@ async function connectToWhatsApp() {
     printQRInTerminal: false,
     logger: pino({ level: 'silent' }),
     browser: Browsers.ubuntu('Chrome'),
-    generateHighQualityLinkPreview: true,
   });
 
   sock.ev.on('creds.update', saveCreds);
@@ -346,7 +304,7 @@ async function connectToWhatsApp() {
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    if (qr) {
+    if (qr && currentMode === 'qr') {
       currentQR = qr;
       connectionStatus = 'qr_ready';
       try {
@@ -358,7 +316,6 @@ async function connectToWhatsApp() {
       console.log('📱 SCANNEZ LE QR CODE CI-DESSOUS DANS WHATSAPP :');
       console.log('======================================================\n');
       qrcodeTerminal.generate(qr, { small: true });
-      console.log('\nOu utilisez l\'association sans caméra : http://<VOTRE-SERVEUR>:3000/whatsapp/\n');
     }
 
     if (connection === 'close') {
@@ -367,25 +324,24 @@ async function connectToWhatsApp() {
       connectionStatus = 'disconnected';
       const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
-      logger.warn(`Connexion WhatsApp interrompue. Statut: ${statusCode}. Reconnexion: ${shouldReconnect}`);
-
-      if (statusCode === DisconnectReason.loggedOut) {
-        try {
-          fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-          fs.mkdirSync(AUTH_DIR, { recursive: true });
-        } catch (_) {}
-      }
+      logger.warn(`Connexion fermée. Statut: ${statusCode}. Reconnexion: ${shouldReconnect}`);
 
       if (shouldReconnect) {
-        setTimeout(connectToWhatsApp, 3000);
-      } else {
-        setTimeout(connectToWhatsApp, 5000);
+        reconnectTimer = setTimeout(() => {
+          // If we had pairing code target, retry with pairing mode
+          if (currentMode === 'pairing' && pairingPhoneTarget) {
+            startWhatsApp(pairingPhoneTarget).catch(() => {});
+          } else {
+            startWhatsApp().catch(() => {});
+          }
+        }, 5000);
       }
     } else if (connection === 'open') {
       currentQR = null;
       currentQRDataUrl = null;
       currentPairingCode = null;
+      currentMode = 'qr';
+      pairingPhoneTarget = null;
       connectionStatus = 'connected';
       const id = sock?.user?.id || '';
       connectedPhone = id.split(':')[0].split('@')[0];
@@ -395,6 +351,25 @@ async function connectToWhatsApp() {
   });
 
   registerMessageHandler(sock);
+
+  // If in pairing mode, wait for noise handshake to be established and request code
+  if (currentMode === 'pairing' && pairingPhoneTarget && !state.creds.registered) {
+    logger.info(`Attente de l'établissement du socket avant demande de code...`);
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+
+    if (sock && !sock.authState.creds.registered) {
+      logger.info(`Demande de code d'association pour +${pairingPhoneTarget}...`);
+      const code = await sock.requestPairingCode(pairingPhoneTarget);
+      currentPairingCode = code;
+      logger.info(`🔑 Code d'association généré : ${code}`);
+      console.log(`\n======================================================`);
+      console.log(`🔑 CODE D'ASSOCIATION POUR LE NUMÉRO +${pairingPhoneTarget} : ${code}`);
+      console.log(`======================================================\n`);
+      return code;
+    }
+  }
+
+  return undefined;
 }
 
 // Web UI & API server
@@ -427,12 +402,12 @@ const server = http.createServer((req, res) => {
         const phone = (data.phoneNumber || '').toString().replace(/\D/g, '');
         if (!phone || phone.length < 8) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Veuillez saisir un numéro valide avec l\'indicatif pays (ex: 33612345678).' }));
+          res.end(JSON.stringify({ error: 'Veuillez saisir un numéro valide avec l\'indicatif pays (ex: 33766817354).' }));
           return;
         }
-        const code = await initPairingMode(phone);
+        const code = await startWhatsApp(phone);
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, code }));
+        res.end(JSON.stringify({ success: true, code: currentPairingCode || code }));
       } catch (err: any) {
         logger.error(err, 'Erreur génération pairing code');
         res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -444,14 +419,13 @@ const server = http.createServer((req, res) => {
 
   // Clear session endpoint
   if (url.pathname === '/api/logout' || url.pathname === '/whatsapp/api/logout') {
+    clearAuthDir();
     try {
-      fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-      fs.mkdirSync(AUTH_DIR, { recursive: true });
       sock?.logout();
     } catch (_) {}
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ success: true }));
-    setTimeout(connectToWhatsApp, 1000);
+    setTimeout(() => startWhatsApp(), 1000);
     return;
   }
 
@@ -531,7 +505,7 @@ const server = http.createServer((req, res) => {
               Copier
             </button>
           </div>
-          <p class="text-[11px] text-emerald-400 font-medium">Validité : ~2 minutes</p>
+          <p class="text-[11px] text-emerald-400 font-medium">Saisissez-le dans WhatsApp sur votre mobile</p>
         </div>
 
         <div class="bg-black/30 p-3.5 rounded-xl border border-slate-800 text-xs text-slate-300 space-y-1.5">
@@ -607,7 +581,7 @@ const server = http.createServer((req, res) => {
       const phone = document.getElementById('phone-input').value.trim();
       const btn = document.getElementById('code-submit-btn');
       btn.disabled = true;
-      btn.innerText = 'Connexion à WhatsApp & génération...';
+      btn.innerText = 'Établissement de la connexion... (~4 sec)';
 
       try {
         const res = await fetch('/whatsapp/api/pairing-code', {
@@ -693,5 +667,5 @@ const server = http.createServer((req, res) => {
 // Start HTTP server and WhatsApp connection
 server.listen(PORT, '0.0.0.0', () => {
   logger.info(`Serveur Web WhatsApp démarré sur http://0.0.0.0:${PORT}`);
-  connectToWhatsApp().catch((err) => logger.error(err, 'Erreur démarrage WhatsApp'));
+  startWhatsApp().catch((err) => logger.error(err, 'Erreur démarrage WhatsApp'));
 });
