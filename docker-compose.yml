@@ -57,34 +57,6 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  whatsapp:
-    build:
-      context: ./whatsapp
-      dockerfile: Dockerfile
-    image: api-antigravity-whatsapp:latest
-    container_name: antigravity-whatsapp
-    restart: unless-stopped
-    ports:
-      - "3001:3001"
-    environment:
-      - BACKEND_URL=http://backend:8080
-      - AUTH_DIR=/app/auth_info_baileys
-      - ALLOWED_NUMBERS=${ALLOWED_NUMBERS:-}
-      - SYSTEM_PROMPT=${SYSTEM_PROMPT:-}
-      - META_ACCESS_TOKEN=${META_ACCESS_TOKEN:-}
-      - META_PHONE_NUMBER_ID=${META_PHONE_NUMBER_ID:-}
-      - META_VERIFY_TOKEN=${META_VERIFY_TOKEN:-antigravity_token}
-    volumes:
-      - whatsapp_auth:/app/auth_info_baileys
-    depends_on:
-      backend:
-        condition: service_healthy
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
 volumes:
   antigravity_gemini:
-  whatsapp_auth:
+
