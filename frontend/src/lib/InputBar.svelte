@@ -1,16 +1,30 @@
 <script lang="ts">
-  import { Send, Square, ShieldAlert, Sparkles } from 'lucide-svelte';
+  import type { Model } from './types';
+  import { Send, Square, ShieldAlert, Sparkles, ChevronDown } from 'lucide-svelte';
 
   interface Props {
     isStreaming: boolean;
     disabled?: boolean;
     dangerMode?: boolean;
+    models?: Model[];
+    selectedModel?: string;
     modelName?: string;
+    onSelectModel?: (modelId: string) => void;
     onSend: (text: string) => void;
     onStop: () => void;
   }
 
-  let { isStreaming, disabled = false, dangerMode = true, modelName = '', onSend, onStop }: Props = $props();
+  let {
+    isStreaming,
+    disabled = false,
+    dangerMode = true,
+    models = [],
+    selectedModel = '',
+    modelName = '',
+    onSelectModel,
+    onSend,
+    onStop,
+  }: Props = $props();
 
   let inputPrompt = $state('');
   let textareaEl = $state<HTMLTextAreaElement | null>(null);
@@ -43,12 +57,29 @@
 <div class="w-full max-w-4xl mx-auto px-4 pb-4">
   <div class="relative bg-[#181c28] border border-slate-800 rounded-2xl shadow-xl transition-all focus-within:border-blue-500/80 focus-within:ring-1 focus-within:ring-blue-500/30">
     <!-- Top toolbar inside input bar -->
-    <div class="flex items-center justify-between px-3 pt-2 pb-1 border-b border-slate-800/40 text-[11px] text-slate-400">
+    <div class="flex items-center justify-between px-3 pt-2 pb-1.5 border-b border-slate-800/60 text-[11px] text-slate-400">
       <div class="flex items-center gap-2">
-        <span class="flex items-center gap-1 font-mono text-indigo-400">
-          <Sparkles size={12} />
-          {modelName || 'Default Model'}
-        </span>
+        {#if onSelectModel && models.length > 0}
+          <div class="relative inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[#141722] hover:bg-[#1c2132] border border-slate-700/80 hover:border-indigo-500/50 text-indigo-300 hover:text-indigo-200 transition-all cursor-pointer">
+            <Sparkles size={12} class="text-indigo-400 shrink-0" />
+            <select
+              value={selectedModel}
+              onchange={(e) => onSelectModel?.((e.target as HTMLSelectElement).value)}
+              disabled={isStreaming || disabled}
+              class="bg-transparent text-xs font-semibold text-slate-200 outline-none cursor-pointer pr-1"
+              title="Changer le modèle d'IA"
+            >
+              {#each models as m}
+                <option value={m.id} class="bg-[#141722] text-slate-200">{m.name}</option>
+              {/each}
+            </select>
+          </div>
+        {:else}
+          <span class="flex items-center gap-1.5 font-mono text-indigo-400 text-xs">
+            <Sparkles size={12} />
+            {modelName || 'Modèle par défaut'}
+          </span>
+        {/if}
       </div>
 
       {#if dangerMode}

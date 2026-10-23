@@ -687,6 +687,21 @@
               Votre espace privé est prêt. Posez votre question ou décrivez votre tâche.
             </p>
 
+            <div class="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#141722] border border-slate-700/80 text-xs">
+              <Cpu size={13} class="text-indigo-400 shrink-0" />
+              <span class="text-slate-400">Modèle :</span>
+              <select
+                value={settings.selectedModel}
+                onchange={(e) => handleSelectModel((e.target as HTMLSelectElement).value)}
+                class="bg-transparent text-indigo-300 hover:text-indigo-200 font-semibold outline-none cursor-pointer"
+                title="Changer de modèle"
+              >
+                {#each models as model}
+                  <option value={model.id} class="bg-[#141722] text-slate-200 font-normal">{model.name}</option>
+                {/each}
+              </select>
+            </div>
+
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mt-8 w-full text-left">
               <button
                 type="button"
@@ -718,7 +733,10 @@
         {isStreaming}
         disabled={!isConnected}
         dangerMode={settings.dangerouslySkipPermissions}
+        {models}
+        selectedModel={settings.selectedModel}
         modelName={currentModelName}
+        onSelectModel={handleSelectModel}
         onSend={handleSend}
         onStop={handleStop}
       />
