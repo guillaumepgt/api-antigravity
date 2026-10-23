@@ -9,23 +9,31 @@
     Cpu,
     Terminal,
     Key,
-    User,
-    LogOut,
     Sparkles,
     Settings as SettingsIcon,
     ArrowUpRight,
-    Bot,
     Send,
     Clock,
     Trash2,
+    LayoutGrid,
+    List,
+    Code2,
+    Layers,
+    Compass,
+    Zap,
+    LogOut,
   } from 'lucide-svelte';
+  import { filterConversations, formatRelativeDate } from './helpers';
 
   interface Props {
     conversations: Conversation[];
     models: Model[];
     selectedModel: string;
     isConnected: boolean;
+    isAuthenticated: boolean;
     userEmail: string;
+    onSelectConversation?: (id: string) => void;
+    onNewChat?: () => void;
     onSelectModel: (modelId: string) => void;
     onOpenTerminal: () => void;
     onOpenApiKeyModal: () => void;
@@ -34,14 +42,15 @@
     onClearAllConversations?: () => void;
     onLogout: () => void;
     onRefresh: () => void;
+    onToggleMobileSidebar?: () => void;
   }
 
   let {
-    conversations,
-    models,
-    selectedModel,
-    isConnected,
-    userEmail,
+    conversations = [],
+    models = [],
+    selectedModel = 'gemini-3.8-flash-high',
+    isConnected = true,
+    userEmail = '',
     onSelectModel,
     onOpenTerminal,
     onOpenApiKeyModal,
@@ -50,51 +59,20 @@
     onClearAllConversations,
     onLogout,
     onRefresh,
+    onToggleMobileSidebar,
   }: Props = $props();
 
   let searchQuery = $state('');
   let quickPrompt = $state('');
+  let viewMode = $state<'grid' | 'list'>('grid');
 
   let userDisplayName = $derived(
-    userEmail ? userEmail.split('@')[0] : 'Guillaume'
+    userEmail
+      ? userEmail.split('@')[0].split('.')[0].replace(/^\w/, (c) => c.toUpperCase())
+      : 'Guillaume'
   );
 
-  let filteredConversations = $derived(
-    conversations.filter((c) =>
-      (c.title || c.preview || c.conversation_id)
-        .toLowerCase()
-        .includes(searchQuery.toLowerCase())
-    )
-  );
-
-  function formatRelativeDate(isoStr: string) {
-    if (!isoStr) return '';
-    try {
-      const date = new Date(isoStr);
-      const now = new Date();
-      const diffMs = now.getTime() - date.getTime();
-      const diffMins = Math.floor(diffMs / (1000 * 60));
-      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-      if (diffMins < 2) return "À l'instant";
-      if (diffMins < 60) return `Il y a ${diffMins} min`;
-      if (diffHours < 24 && date.getDate() === now.getDate()) {
-        return `Aujourd'hui à ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-      }
-      if (diffDays === 1 || (diffHours < 48 && date.getDate() === now.getDate() - 1)) {
-        return `Hier à ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-      }
-      return date.toLocaleDateString(undefined, {
-        day: 'numeric',
-        month: 'short',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-    } catch {
-      return isoStr;
-    }
-  }
+  let filteredConversations = $derived(filterConversations(conversations, searchQuery));
 
   function handleStartQuickPrompt(promptText: string) {
     const text = promptText.trim();
@@ -110,73 +88,110 @@
       handleStartQuickPrompt(quickPrompt);
     }
   }
+
+  const quickTemplates = [
+    {
+      icon: Compass,
+      title: 'Architecture & Workspace',
+      subtitle: 'Analyser la structure du projet, les dépendances et résumer les composants',
+      prompt: 'Explique-moi ce qui se trouve dans cet espace de travail et résume l’architecture du projet.',
+      color: 'text-violet-400 bg-violet-500/10 border-violet-500/20',
+    },
+    {
+      icon: Zap,
+      title: 'Outils & Capacités Agent',
+      subtitle: 'Lister les MCP, sidecars, commandes bash et outils d’automatisation',
+      prompt: 'Quels sont les outils, MCP, sidecars et capacités d’exécution disponibles ?',
+      color: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20',
+    },
+    {
+      icon: Code2,
+      title: 'Audit & Refactoring',
+      subtitle: 'Inspecter les derniers fichiers modifiés et suggérer des optimisations de code',
+      prompt: 'Vérifie le statut git ou les fichiers modifiés et propose des améliorations de qualité.',
+      color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
+    },
+  ];
 </script>
 
-<div class="min-h-screen bg-[#0c0e15] text-slate-100 flex flex-col">
-  <!-- Top Navigation Bar -->
-  <header class="border-b border-slate-800/80 bg-[#0c0e15]/80 backdrop-blur-md sticky top-0 z-30">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
-      <!-- Left: Logo & Status -->
+<div class="min-h-full bg-[#06070b] bg-cosmic-grid text-zinc-100 flex flex-col relative overflow-x-hidden font-sans">
+  <!-- Ambient Background Spotlights -->
+  <div class="pointer-events-none fixed top-[-180px] left-[25%] w-[600px] h-[420px] bg-violet-600/12 rounded-full blur-[130px]"></div>
+  <div class="pointer-events-none fixed bottom-[-200px] right-[10%] w-[500px] h-[400px] bg-cyan-500/8 rounded-full blur-[130px]"></div>
+
+  <!-- Top Navigation Header -->
+  <header class="border-b border-white/[0.06] bg-[#06070b]/75 backdrop-blur-xl sticky top-0 z-30">
+    <div class="max-w-6xl mx-auto px-4 sm:px-8 h-16 flex items-center justify-between gap-4">
+      <!-- Left: Mobile Brand / Status Breadcrumb -->
       <div class="flex items-center gap-3">
-        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-purple-600 flex items-center justify-center font-bold text-white text-base shadow-lg shadow-blue-500/20">
-          AG
-        </div>
-        <div>
-          <div class="flex items-center gap-2">
-            <span class="font-bold text-slate-100 tracking-tight text-sm sm:text-base">Antigravity</span>
-            <span class="text-[11px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-medium">
-              Cockpit
-            </span>
-          </div>
-          <div class="flex items-center gap-1.5 text-[11px] text-slate-400 font-medium">
-            <span class="w-2 h-2 rounded-full {isConnected ? 'bg-emerald-500 shadow-xs shadow-emerald-500/50' : 'bg-red-500'}"></span>
-            <span>{isConnected ? 'API Connectée' : 'Hors ligne'}</span>
-          </div>
+        {#if onToggleMobileSidebar}
+          <button
+            type="button"
+            onclick={onToggleMobileSidebar}
+            class="md:hidden p-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-zinc-300 cursor-pointer"
+            title="Menu"
+          >
+            <Layers size={16} class="text-violet-400" />
+          </button>
+        {/if}
+        <div class="flex items-center gap-2.5">
+          <span class="text-xs font-semibold text-zinc-400 hidden sm:inline">Workspace</span>
+          <span class="text-zinc-700 hidden sm:inline">/</span>
+          <span class="text-xs font-bold text-white tracking-tight flex items-center gap-1.5">
+            <Layers size={14} class="text-violet-400 hidden sm:inline" />
+            Cockpit Principal
+          </span>
+          <span class="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full bg-white/[0.03] border border-white/[0.07] text-zinc-300">
+            <span
+              class="w-1.5 h-1.5 rounded-full {isConnected ? 'bg-emerald-400' : 'bg-rose-500'}"
+            ></span>
+            {isConnected ? 'API Prête' : 'Hors ligne'}
+          </span>
         </div>
       </div>
 
-      <!-- Right: Model, Actions & User Profile -->
-      <div class="flex items-center gap-2 sm:gap-3">
-        <!-- Model Selector Dropdown -->
-        <div class="flex items-center gap-1.5 bg-[#141722] border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs">
-          <Cpu size={13} class="text-indigo-400 shrink-0" />
+      <!-- Right: Quick Actions Bar -->
+      <div class="flex items-center gap-2">
+        <!-- Model Pill -->
+        <div class="hidden sm:flex items-center gap-1.5 bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.08] rounded-xl px-3 py-1.5 text-xs transition-colors">
+          <Cpu size={13} class="text-violet-400 shrink-0" />
           <select
             value={selectedModel}
             onchange={(e) => onSelectModel((e.target as HTMLSelectElement).value)}
-            class="bg-transparent text-slate-200 outline-none cursor-pointer pr-1"
-            title="Sélectionner le modèle et niveau de réflexion"
+            class="bg-transparent text-zinc-200 font-medium outline-none cursor-pointer pr-1"
+            title="Changer de modèle"
           >
             {#each models as model}
-              <option value={model.id} class="bg-[#141722] text-slate-200">{model.name}</option>
+              <option value={model.id} class="bg-[#0c0e16] text-zinc-200">{model.name}</option>
             {/each}
             {#if models.length === 0}
-              <option value="gemini-3.8-flash-high" class="bg-[#141722] text-slate-200">Gemini 3.8 Flash (High)</option>
-              <option value="gemini-3.8-flash-medium" class="bg-[#141722] text-slate-200">Gemini 3.8 Flash (Medium)</option>
-              <option value="gemini-3.8-flash-low" class="bg-[#141722] text-slate-200">Gemini 3.8 Flash (Low)</option>
+              <option value="gemini-3.8-flash-high" class="bg-[#0c0e16] text-zinc-200">Gemini 3.8 Flash (High)</option>
+              <option value="gemini-3.8-flash-medium" class="bg-[#0c0e16] text-zinc-200">Gemini 3.8 Flash (Medium)</option>
+              <option value="gemini-3.8-flash-low" class="bg-[#0c0e16] text-zinc-200">Gemini 3.8 Flash (Low)</option>
             {/if}
           </select>
         </div>
 
-        <!-- WhatsApp Link -->
+        <!-- WhatsApp Bridge link -->
         <a
-          href="/whatsapp/"
+          href="https://web.whatsapp.com"
           target="_blank"
           rel="noopener noreferrer"
-          class="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-950/40 border border-emerald-800/40 hover:bg-emerald-900/50 text-emerald-300 text-xs font-medium transition-all shadow-xs"
-          title="WhatsApp Bot"
+          class="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 hover:bg-emerald-500/20 text-emerald-300 text-xs font-medium transition-all cursor-pointer"
+          title="Passerelle WhatsApp"
         >
           <MessageSquare size={13} />
           <span>WhatsApp</span>
         </a>
 
-        <!-- Personal Terminal -->
+        <!-- Terminal -->
         <button
           type="button"
           onclick={onOpenTerminal}
-          class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#141722] border border-slate-800 hover:bg-slate-800/60 text-slate-300 text-xs font-medium transition-all cursor-pointer"
-          title="Ouvrir le terminal personnel ttyd"
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/[0.03] border border-white/[0.08] hover:bg-white/[0.07] text-zinc-200 text-xs font-medium transition-all cursor-pointer"
+          title="Ouvrir le terminal web"
         >
-          <Terminal size={13} class="text-blue-400" />
+          <Terminal size={13} class="text-cyan-400" />
           <span class="hidden sm:inline">Terminal</span>
         </button>
 
@@ -184,274 +199,349 @@
         <button
           type="button"
           onclick={onOpenApiKeyModal}
-          class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#141722] border border-slate-800 hover:bg-slate-800/60 text-slate-300 text-xs font-medium transition-all cursor-pointer"
-          title="Clé API"
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/[0.03] border border-white/[0.08] hover:bg-white/[0.07] text-zinc-200 text-xs font-medium transition-all cursor-pointer"
+          title="Clé API & Intégrations"
         >
-          <Key size={13} class="text-indigo-400" />
-          <span class="hidden sm:inline">Clé API</span>
+          <Key size={13} class="text-violet-400" />
+          <span class="hidden sm:inline">API</span>
         </button>
 
         <!-- Settings -->
         <button
           type="button"
           onclick={onOpenSettings}
-          class="p-2 rounded-xl bg-[#141722] border border-slate-800 hover:bg-slate-800/60 text-slate-300 transition-all cursor-pointer"
+          class="p-2 rounded-xl bg-white/[0.03] border border-white/[0.08] hover:bg-white/[0.07] text-zinc-300 hover:text-white transition-all cursor-pointer"
           title="Paramètres"
         >
           <SettingsIcon size={14} />
         </button>
 
-        <!-- User profile chip & Logout -->
-        <div class="flex items-center gap-1.5 pl-2 border-l border-slate-800/80">
-          <div class="flex items-center gap-2 bg-[#141722] border border-slate-800/80 rounded-xl px-2.5 py-1 text-xs">
-            <div class="w-6 h-6 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center font-bold text-[11px] shrink-0">
+        <!-- User profile & Logout -->
+        <div class="flex items-center gap-1 pl-1 sm:pl-2 border-l border-white/[0.08]">
+          <div class="flex items-center gap-1.5 bg-white/[0.03] border border-white/[0.08] rounded-xl px-2.5 py-1 text-xs">
+            <div class="w-5 h-5 rounded-lg bg-gradient-to-tr from-violet-600 to-cyan-500 text-white flex items-center justify-center font-bold text-[10px] shrink-0">
               {userEmail ? userEmail.slice(0, 1).toUpperCase() : 'G'}
             </div>
-            <span class="max-w-[120px] sm:max-w-[160px] truncate font-medium text-slate-200 hidden xs:inline">
-              {userEmail || 'Mon Compte'}
+            <span class="max-w-[100px] sm:max-w-[130px] truncate font-medium text-zinc-200 hidden xs:inline text-[11px]">
+              {userDisplayName}
             </span>
           </div>
-
           <button
             type="button"
             onclick={onLogout}
-            class="p-2 rounded-xl text-slate-400 hover:text-red-300 hover:bg-red-950/40 border border-transparent hover:border-red-900/40 transition-colors cursor-pointer"
+            class="p-2 rounded-xl text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
             title="Se déconnecter"
           >
-            <LogOut size={15} />
+            <LogOut size={14} />
           </button>
         </div>
       </div>
     </div>
   </header>
 
-  <!-- Hero Section -->
-  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-10">
-    <!-- Welcome banner & Start new chat -->
-    <div class="relative overflow-hidden rounded-3xl bg-gradient-to-br from-[#121624] via-[#10131d] to-[#0c0e15] border border-slate-800/80 p-6 sm:p-10 shadow-2xl">
-      <!-- Glow ambient background -->
-      <div class="absolute -top-24 -right-24 w-96 h-96 bg-blue-600/10 rounded-full blur-3xl pointer-events-none"></div>
-      <div class="absolute -bottom-24 -left-24 w-96 h-96 bg-purple-600/10 rounded-full blur-3xl pointer-events-none"></div>
+  <!-- Main Content Container -->
+  <main class="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-8 py-8 sm:py-10 space-y-10 relative z-10">
+    <!-- Hero Command Center -->
+    <section class="relative rounded-3xl glass-panel p-6 sm:p-10 overflow-hidden">
+      <div class="absolute -top-32 -right-32 w-96 h-96 bg-gradient-to-br from-violet-600/20 via-indigo-500/10 to-transparent rounded-full blur-3xl pointer-events-none"></div>
 
-      <div class="relative z-10 max-w-3xl">
-        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-medium mb-4">
-          <Sparkles size={13} />
-          <span>Espace de travail Google Sécurisé</span>
+      <div class="relative z-10 max-w-3xl space-y-6">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/10 border border-violet-500/25 text-violet-300 text-xs font-medium">
+          <Sparkles size={12} class="text-violet-400" />
+          <span>Agent Autonome • Multi-Onglets Isolés</span>
         </div>
 
-        <h1 class="text-3xl sm:text-4xl font-extrabold text-white tracking-tight leading-tight">
-          Bonjour {userDisplayName} 👋
-        </h1>
-        <p class="text-slate-400 text-sm sm:text-base mt-2 leading-relaxed">
-          Chaque chat s'ouvre dans un <strong>nouvel onglet dédié</strong> sans aucun bandeau ni distraction, pour une concentration totale.
-        </p>
-
-        <!-- Main Action Buttons -->
-        <div class="mt-8 flex flex-wrap items-center gap-3">
-          <a
-            href="/?c=new"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="inline-flex items-center gap-2.5 px-6 py-3.5 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-semibold text-sm shadow-xl shadow-blue-500/25 transition-all transform hover:-translate-y-0.5 cursor-pointer"
-          >
-            <Plus size={18} />
-            <span>Nouveau Chat (Nouvel onglet)</span>
-            <ExternalLink size={14} class="opacity-70 ml-0.5" />
-          </a>
+        <div class="space-y-2">
+          <h1 class="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
+            Bonjour,{' '}
+            <span class="bg-gradient-to-r from-white via-violet-200 to-cyan-200 bg-clip-text text-transparent">
+              {userDisplayName}
+            </span>
+          </h1>
+          <p class="text-zinc-400 text-sm sm:text-base leading-relaxed">
+            Lancez une instruction ci-dessous ou ouvrez une session dédiée. Chaque tâche s'exécute dans un environnement fluide et autonome.
+          </p>
         </div>
 
-        <!-- Quick prompt input box -->
-        <div class="mt-6">
-          <div class="relative flex items-center bg-[#181c28]/90 border border-slate-700/80 rounded-2xl p-2 shadow-xl focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-500/20 transition-all">
+        <!-- Spotlight Command Input -->
+        <div class="relative group">
+          <div class="absolute -inset-0.5 bg-gradient-to-r from-violet-600/50 via-indigo-500/40 to-cyan-500/50 rounded-2xl blur opacity-30 group-focus-within:opacity-75 transition duration-300 pointer-events-none"></div>
+          <div class="relative flex flex-col sm:flex-row items-stretch sm:items-center gap-2 bg-[#090b11] border border-white/[0.1] group-focus-within:border-violet-500/60 rounded-2xl p-2.5 shadow-2xl transition-all">
             <textarea
               bind:value={quickPrompt}
               onkeydown={handleQuickPromptKeydown}
-              placeholder="Poser une question ou donner une instruction directement..."
-              rows={1}
-              class="flex-1 bg-transparent px-3 py-2 text-sm text-slate-100 placeholder-slate-500 resize-none outline-none"
+              placeholder="Décrivez une tâche, posez une question ou lancez un audit de code..."
+              rows={2}
+              class="flex-1 bg-transparent px-3 py-1.5 text-sm text-white placeholder-zinc-500 resize-none outline-none"
             ></textarea>
 
+            <div class="flex items-center justify-between sm:justify-end gap-2 pt-2 sm:pt-0 border-t sm:border-t-0 border-white/[0.06]">
+              <a
+                href="/?c=new"
+                target="_blank"
+                onclick={(e) => {
+                  e.preventDefault();
+                  window.open('/?c=new', '_blank');
+                }}
+                class="px-3.5 py-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.07] text-zinc-300 hover:text-white text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer"
+                title="Ouvrir une session vierge"
+              >
+                <Plus size={14} />
+                <span>Session vierge</span>
+              </a>
+
+              <button
+                type="button"
+                onclick={() => handleStartQuickPrompt(quickPrompt)}
+                disabled={!quickPrompt.trim()}
+                class="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-35 text-white text-xs font-semibold shadow-lg shadow-violet-600/25 transition-all cursor-pointer shrink-0"
+              >
+                <span>Exécuter</span>
+                <Send size={13} />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bento Starter Templates -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+          {#each quickTemplates as item}
+            {@const IconComponent = item.icon}
             <button
               type="button"
-              onclick={() => handleStartQuickPrompt(quickPrompt)}
-              disabled={!quickPrompt.trim()}
-              class="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600 text-white text-xs font-semibold shadow-md shadow-blue-500/20 transition-all cursor-pointer shrink-0"
-              title="Ouvrir dans un nouvel onglet"
+              onclick={() => handleStartQuickPrompt(item.prompt)}
+              class="group text-left p-3.5 rounded-2xl bg-white/[0.02] hover:bg-white/[0.05] border border-white/[0.06] hover:border-violet-500/30 transition-all duration-200 cursor-pointer flex flex-col justify-between gap-3"
             >
-              <span>Lancer le chat</span>
-              <Send size={13} />
+              <div class="flex items-center justify-between w-full">
+                <div class="p-2 rounded-xl border {item.color}">
+                  <IconComponent size={15} />
+                </div>
+                <ArrowUpRight
+                  size={14}
+                  class="text-zinc-600 group-hover:text-violet-400 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all"
+                />
+              </div>
+              <div>
+                <div class="font-semibold text-xs text-zinc-200 group-hover:text-white transition-colors">
+                  {item.title}
+                </div>
+                <div class="text-[11px] text-zinc-500 line-clamp-2 mt-0.5 leading-snug">
+                  {item.subtitle}
+                </div>
+              </div>
             </button>
-          </div>
-        </div>
-
-        <!-- Quick Suggestions -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mt-5">
-          <button
-            type="button"
-            onclick={() => handleStartQuickPrompt("Explain what is in this workspace and summarize the architecture.")}
-            class="text-left p-3 rounded-xl bg-[#141722]/80 border border-slate-800/80 hover:border-blue-500/40 hover:bg-slate-800/40 text-xs text-slate-300 transition-all cursor-pointer group flex items-center justify-between"
-          >
-            <div>
-              <div class="font-medium text-slate-200 group-hover:text-blue-300 transition-colors">🔍 Explorer le projet & workspace</div>
-              <div class="text-[11px] text-slate-500">Analyser les fichiers et l'architecture</div>
-            </div>
-            <ArrowUpRight size={14} class="text-slate-600 group-hover:text-blue-400 transition-colors shrink-0 ml-2" />
-          </button>
-
-          <button
-            type="button"
-            onclick={() => handleStartQuickPrompt("What tools, sidecars and capabilities do you have available?")}
-            class="text-left p-3 rounded-xl bg-[#141722]/80 border border-slate-800/80 hover:border-blue-500/40 hover:bg-slate-800/40 text-xs text-slate-300 transition-all cursor-pointer group flex items-center justify-between"
-          >
-            <div>
-              <div class="font-medium text-slate-200 group-hover:text-blue-300 transition-colors">⚡ Capacités & Outils disponibles</div>
-              <div class="text-[11px] text-slate-500">Lister les sous-agents, web search, etc.</div>
-            </div>
-            <ArrowUpRight size={14} class="text-slate-600 group-hover:text-blue-400 transition-colors shrink-0 ml-2" />
-          </button>
+          {/each}
         </div>
       </div>
-    </div>
+    </section>
 
-    <!-- Conversations Hub Section -->
-    <div class="space-y-5">
-      <!-- Section Header & Search -->
+    <!-- Conversations Directory Section -->
+    <section class="space-y-5">
+      <!-- Toolbar: Title, Search, View Switcher, Clear -->
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div class="flex items-center gap-3">
-          <div class="p-2 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400">
-            <MessageSquare size={18} />
+          <div class="w-9 h-9 rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center text-violet-400">
+            <MessageSquare size={17} />
           </div>
           <div>
-            <h2 class="text-lg font-bold text-slate-100 tracking-tight">Vos Conversations Récentes</h2>
-            <p class="text-xs text-slate-400">
-              {filteredConversations.length} conversation{filteredConversations.length > 1 ? 's' : ''} disponible{filteredConversations.length > 1 ? 's' : ''}
+            <h2 class="text-base font-bold text-white tracking-tight">Sessions de travail</h2>
+            <p class="text-xs text-zinc-500">
+              {filteredConversations.length} conversation{filteredConversations.length > 1 ? 's' : ''} enregistrée{filteredConversations.length > 1 ? 's' : ''}
             </p>
           </div>
         </div>
 
-        <div class="flex items-center gap-2.5">
-          <!-- Search input -->
-          <div class="relative w-full sm:w-64">
-            <Search size={14} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+        <div class="flex items-center gap-2 flex-wrap">
+          <!-- Search Box -->
+          <div class="relative flex-1 sm:flex-initial sm:w-64">
+            <Search size={14} class="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
             <input
               type="text"
               bind:value={searchQuery}
-              placeholder="Rechercher une conversation..."
-              class="w-full bg-[#141722] border border-slate-800 text-slate-200 text-xs rounded-xl pl-9 pr-3 py-2 placeholder-slate-500 outline-none focus:border-blue-500 transition-colors"
+              placeholder="Rechercher une session..."
+              class="w-full bg-white/[0.03] border border-white/[0.07] focus:border-violet-500/50 text-zinc-200 text-xs rounded-xl pl-9 pr-3 py-2 placeholder-zinc-500 outline-none transition-all"
             />
           </div>
 
-          <!-- Refresh button -->
+          <!-- View Switcher (Grid / List) -->
+          <div class="flex items-center bg-white/[0.03] p-1 rounded-xl border border-white/[0.07]">
+            <button
+              type="button"
+              onclick={() => (viewMode = 'grid')}
+              class="p-1.5 rounded-lg transition-all cursor-pointer {viewMode === 'grid' ? 'bg-violet-600 text-white shadow-xs' : 'text-zinc-400 hover:text-white'}"
+              title="Vue Grille"
+            >
+              <LayoutGrid size={13} />
+            </button>
+            <button
+              type="button"
+              onclick={() => (viewMode = 'list')}
+              class="p-1.5 rounded-lg transition-all cursor-pointer {viewMode === 'list' ? 'bg-violet-600 text-white shadow-xs' : 'text-zinc-400 hover:text-white'}"
+              title="Vue Liste"
+            >
+              <List size={13} />
+            </button>
+          </div>
+
+          <!-- Refresh -->
           <button
             type="button"
             onclick={onRefresh}
-            class="p-2 rounded-xl bg-[#141722] border border-slate-800 hover:bg-slate-800/60 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
-            title="Rafraîchir la liste"
+            class="p-2 rounded-xl bg-white/[0.03] border border-white/[0.07] hover:bg-white/[0.07] text-zinc-400 hover:text-white transition-all cursor-pointer"
+            title="Actualiser"
           >
-            <RefreshCw size={15} />
+            <RefreshCw size={14} />
           </button>
 
-          <!-- Clear all conversations button -->
+          <!-- Clear All -->
           {#if conversations.length > 0 && onClearAllConversations}
             <button
               type="button"
               onclick={onClearAllConversations}
-              class="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-950/40 hover:bg-red-900/50 border border-red-900/50 text-red-400 hover:text-red-200 text-xs font-medium transition-all cursor-pointer shadow-xs"
-              title="Supprimer définitivement toutes les conversations"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 text-rose-300 text-xs font-medium transition-all cursor-pointer"
+              title="Tout supprimer"
             >
               <Trash2 size={13} />
-              <span class="hidden sm:inline">Tout effacer</span>
+              <span class="hidden sm:inline">Purger</span>
             </button>
           {/if}
         </div>
       </div>
 
-      <!-- Conversations Cards Grid -->
+      <!-- Empty State -->
       {#if filteredConversations.length === 0}
-        <div class="p-12 rounded-2xl bg-[#121624]/60 border border-slate-800/80 text-center">
-          <div class="w-12 h-12 rounded-2xl bg-slate-800/60 flex items-center justify-center text-slate-400 mx-auto mb-3">
+        <div class="p-14 rounded-3xl glass-panel text-center max-w-lg mx-auto my-4">
+          <div class="w-12 h-12 rounded-2xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center text-violet-400 mx-auto mb-4">
             <MessageSquare size={22} />
           </div>
-          <h3 class="text-sm font-semibold text-slate-200">
-            {searchQuery ? 'Aucune discussion ne correspond à votre recherche' : 'Aucune discussion pour le moment'}
+          <h3 class="text-sm font-bold text-white">
+            {searchQuery ? 'Aucun résultat pour cette recherche' : 'Aucune session active'}
           </h3>
-          <p class="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-            {searchQuery ? 'Essayez un autre mot-clé ou réinitialisez la recherche.' : 'Démarrez une nouvelle conversation ci-dessus pour poser des questions à Antigravity.'}
+          <p class="text-xs text-zinc-500 mt-1.5 leading-relaxed">
+            {searchQuery
+              ? 'Essayez avec d’autres termes ou effacez le filtre.'
+              : 'Démarrez votre première session avec Antigravity en utilisant la barre de commande ci-dessus.'}
           </p>
-          {#if !searchQuery}
-            <div class="mt-4">
-              <a
-                href="/?c=new"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-all shadow-md shadow-blue-500/20"
-              >
-                <Plus size={14} />
-                <span>Ouvrir un nouveau chat</span>
-              </a>
-            </div>
-          {/if}
         </div>
-      {:else}
+      {:else if viewMode === 'grid'}
+        <!-- Grid View -->
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {#each filteredConversations as conv (conv.conversation_id)}
             <a
               href={`/?c=${conv.conversation_id}`}
               target="_blank"
-              rel="noopener noreferrer"
-              class="group block p-4 rounded-2xl bg-[#121624]/70 hover:bg-[#151a2d] border border-slate-800/80 hover:border-blue-500/50 shadow-md hover:shadow-xl hover:shadow-blue-500/5 transition-all transform hover:-translate-y-0.5 cursor-pointer relative"
+              onclick={(e) => {
+                e.preventDefault();
+                window.open(`/?c=${conv.conversation_id}`, '_blank');
+              }}
+              class="group flex flex-col justify-between p-5 rounded-2xl glass-panel hover:bg-white/[0.04] hover:border-violet-500/40 transition-all duration-200 hover:-translate-y-0.5 cursor-pointer relative overflow-hidden"
             >
-              <div class="flex items-start justify-between gap-3 mb-2">
-                <div class="flex items-center gap-2 min-w-0">
-                  <div class="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 shrink-0">
-                    <MessageSquare size={14} />
+              <div>
+                <div class="flex items-start justify-between gap-3 mb-3">
+                  <div class="flex items-center gap-2.5 min-w-0">
+                    <div class="p-2 rounded-xl bg-violet-500/10 border border-violet-500/20 text-violet-400 shrink-0 group-hover:bg-violet-600 group-hover:text-white transition-colors">
+                      <MessageSquare size={14} />
+                    </div>
+                    <h4 class="font-bold text-sm text-zinc-100 group-hover:text-white transition-colors truncate">
+                      {conv.title || 'Session sans titre'}
+                    </h4>
                   </div>
-                  <h4 class="font-semibold text-xs sm:text-sm text-slate-200 group-hover:text-blue-300 transition-colors truncate">
-                    {conv.title || 'Conversation sans titre'}
-                  </h4>
+
+                  <div class="flex items-center gap-1 shrink-0">
+                    {#if onDeleteConversation}
+                      <button
+                        type="button"
+                        onclick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          onDeleteConversation?.(conv.conversation_id);
+                        }}
+                        class="p-1.5 rounded-lg text-zinc-500 hover:text-rose-400 hover:bg-rose-500/10 opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
+                        title="Supprimer"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    {/if}
+                    <div class="p-1.5 rounded-lg text-zinc-500 group-hover:text-violet-400 transition-colors">
+                      <ExternalLink size={13} />
+                    </div>
+                  </div>
                 </div>
 
-                <div class="flex items-center gap-1 shrink-0">
-                  {#if onDeleteConversation}
-                    <button
-                      type="button"
-                      onclick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        onDeleteConversation?.(conv.conversation_id);
-                      }}
-                      class="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-950/40 opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
-                      title="Supprimer cette discussion"
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  {/if}
-                  <div class="p-1.5 rounded-lg text-slate-500 group-hover:text-blue-400 group-hover:bg-blue-500/10 transition-colors">
-                    <ExternalLink size={13} />
-                  </div>
-                </div>
+                <p class="text-xs text-zinc-400 line-clamp-2 leading-relaxed mb-4 min-h-[2.5rem]">
+                  {conv.preview || 'Aucun aperçu disponible pour cette session.'}
+                </p>
               </div>
 
-              <p class="text-xs text-slate-400 line-clamp-2 leading-relaxed mb-4 min-h-[2.5rem]">
-                {conv.preview || 'Aucun aperçu disponible'}
-              </p>
-
-              <div class="flex items-center justify-between text-[11px] text-slate-500 pt-3 border-t border-slate-800/60">
+              <div class="flex items-center justify-between text-[11px] text-zinc-500 pt-3 border-t border-white/[0.06] font-mono">
                 <div class="flex items-center gap-1.5">
-                  <Clock size={11} class="text-slate-600" />
+                  <Clock size={11} class="text-zinc-600" />
                   <span>{formatRelativeDate(conv.last_modified_time)}</span>
                 </div>
 
                 {#if conv.step_count}
-                  <span class="px-2 py-0.5 rounded-md bg-slate-800/80 text-slate-400 text-[10px] font-mono">
-                    {conv.step_count} étape{conv.step_count > 1 ? 's' : ''}
+                  <span class="px-2 py-0.5 rounded-md bg-white/[0.04] border border-white/[0.06] text-zinc-300 text-[10px]">
+                    {conv.step_count} tour{conv.step_count > 1 ? 's' : ''}
                   </span>
                 {/if}
               </div>
             </a>
           {/each}
         </div>
+      {:else}
+        <!-- Compact List View -->
+        <div class="rounded-2xl glass-panel divide-y divide-white/[0.06] overflow-hidden">
+          {#each filteredConversations as conv (conv.conversation_id)}
+            <a
+              href={`/?c=${conv.conversation_id}`}
+              target="_blank"
+              onclick={(e) => {
+                e.preventDefault();
+                window.open(`/?c=${conv.conversation_id}`, '_blank');
+              }}
+              class="group flex items-center justify-between gap-4 px-5 py-3.5 hover:bg-white/[0.04] transition-colors cursor-pointer"
+            >
+              <div class="flex items-center gap-3.5 min-w-0 flex-1">
+                <div class="p-2 rounded-xl bg-violet-500/10 text-violet-400 shrink-0">
+                  <MessageSquare size={14} />
+                </div>
+                <div class="min-w-0 flex-1">
+                  <div class="font-semibold text-xs sm:text-sm text-zinc-100 group-hover:text-violet-300 truncate transition-colors">
+                    {conv.title || 'Session sans titre'}
+                  </div>
+                  <div class="text-xs text-zinc-500 truncate mt-0.5">
+                    {conv.preview || 'Aucun aperçu'}
+                  </div>
+                </div>
+              </div>
+
+              <div class="flex items-center gap-3 shrink-0 text-xs font-mono text-zinc-500">
+                {#if conv.step_count}
+                  <span class="hidden sm:inline px-2 py-0.5 rounded bg-white/[0.04] text-[10px] text-zinc-400">
+                    {conv.step_count} étapes
+                  </span>
+                {/if}
+                <span class="text-[11px]">{formatRelativeDate(conv.last_modified_time)}</span>
+                {#if onDeleteConversation}
+                  <button
+                    type="button"
+                    onclick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onDeleteConversation?.(conv.conversation_id);
+                    }}
+                    class="p-1.5 rounded-lg text-zinc-500 hover:text-rose-400 hover:bg-rose-500/10 opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
+                    title="Supprimer"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                {/if}
+                <ExternalLink size={13} class="text-zinc-600 group-hover:text-violet-400" />
+              </div>
+            </a>
+          {/each}
+        </div>
       {/if}
-    </div>
+    </section>
   </main>
 </div>

@@ -1,6 +1,19 @@
 <script lang="ts">
   import type { Conversation, Model } from './types';
-  import { Plus, MessageSquare, Settings as SettingsIcon, Radio, RefreshCw, Cpu, Terminal, Key, User, LogOut, ExternalLink, Trash2 } from 'lucide-svelte';
+  import {
+    Plus,
+    MessageSquare,
+    Settings as SettingsIcon,
+    RefreshCw,
+    Cpu,
+    Terminal,
+    Key,
+    LogOut,
+    Trash2,
+    Search,
+    Sparkles,
+  } from 'lucide-svelte';
+  import { filterConversations, formatRelativeDate } from './helpers';
 
   interface Props {
     conversations: Conversation[];
@@ -23,15 +36,12 @@
   }
 
   let {
-    conversations,
-    currentConversationId,
-    models,
-    selectedModel,
-    isConnected,
-    isAuthenticated,
-    userEmail,
-    onSelectConversation,
-    onNewChat,
+    conversations = [],
+    currentConversationId = null,
+    models = [],
+    selectedModel = 'gemini-3.8-flash-high',
+    isConnected = true,
+    userEmail = '',
     onSelectModel,
     onOpenSettings,
     onOpenTerminal,
@@ -44,41 +54,40 @@
 
   let searchQuery = $state('');
 
-  let filteredConversations = $derived(
-    conversations.filter(c =>
-      (c.title || c.preview || c.conversation_id)
-        .toLowerCase()
-        .includes(searchQuery.toLowerCase())
-    )
-  );
-
-  function formatDate(isoStr: string) {
-    if (!isoStr) return '';
-    try {
-      const date = new Date(isoStr);
-      return date.toLocaleDateString(undefined, {
-        month: 'short',
-        day: 'numeric',
-      });
-    } catch {
-      return '';
-    }
-  }
+  let filteredConversations = $derived(filterConversations(conversations, searchQuery));
 </script>
 
-<aside class="w-72 bg-[#0c0e15] border-r border-slate-800/80 flex flex-col h-full shrink-0 select-none">
+<aside class="w-76 bg-[#080a10]/95 backdrop-blur-2xl border-r border-white/[0.06] flex flex-col h-full shrink-0 select-none relative z-20 font-sans">
+  <!-- Subtle Top Ambient Glow -->
+  <div class="absolute top-0 left-0 right-0 h-32 bg-gradient-to-b from-violet-600/8 to-transparent pointer-events-none"></div>
+
   <!-- Brand Header -->
-  <div class="p-4 border-b border-slate-800/60 flex items-center justify-between">
-    <div class="flex items-center gap-2.5">
-      <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 via-indigo-600 to-purple-600 flex items-center justify-center font-bold text-white text-base shadow-md shadow-blue-500/20">
-        AG
+  <div class="p-4 border-b border-white/[0.06] flex items-center justify-between relative">
+    <div class="flex items-center gap-3">
+      <div class="relative group">
+        <div class="absolute -inset-0.5 bg-gradient-to-r from-violet-600 to-cyan-500 rounded-xl blur opacity-50 group-hover:opacity-80 transition duration-300"></div>
+        <div class="relative w-9 h-9 rounded-xl bg-[#0c0e16] border border-white/15 flex items-center justify-center font-extrabold text-white text-sm tracking-tighter shadow-md">
+          <Sparkles size={16} class="text-violet-400" />
+        </div>
       </div>
       <div>
-        <h1 class="text-sm font-semibold text-slate-100 tracking-tight leading-none">Antigravity</h1>
-        <div class="flex items-center gap-1.5 mt-1">
-          <span class="w-2 h-2 rounded-full {isConnected ? 'bg-emerald-500 shadow-sm shadow-emerald-500/50' : 'bg-red-500'}"></span>
-          <span class="text-[10px] text-slate-400 font-medium">
-            {isConnected ? 'API Connected' : 'Offline / Error'}
+        <div class="flex items-center gap-1.5">
+          <h1 class="text-sm font-bold text-white tracking-tight leading-none">Antigravity</h1>
+          <span class="text-[9px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-300 border border-violet-500/25">
+            OS
+          </span>
+        </div>
+        <div class="flex items-center gap-1.5 mt-1.5">
+          <span class="relative flex h-2 w-2">
+            {#if isConnected}
+              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            {/if}
+            <span
+              class="relative inline-flex rounded-full h-2 w-2 {isConnected ? 'bg-emerald-400' : 'bg-rose-500'}"
+            ></span>
+          </span>
+          <span class="text-[10px] text-zinc-400 font-medium">
+            {isConnected ? 'Node Online' : 'Offline'}
           </span>
         </div>
       </div>
@@ -87,129 +96,128 @@
     <button
       type="button"
       onclick={onRefresh}
-      class="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
-      title="Refresh list"
+      class="p-2 rounded-xl bg-white/[0.03] hover:bg-white/[0.08] border border-white/[0.05] text-zinc-400 hover:text-white transition-all cursor-pointer"
+      title="Rafraîchir"
     >
-      <RefreshCw size={15} />
+      <RefreshCw size={14} />
     </button>
   </div>
 
-  <!-- Authenticated User Card -->
-  <div class="px-3 py-2 border-b border-slate-800/60">
-    <div class="w-full p-2.5 rounded-xl bg-[#141722] border border-slate-800 flex items-center justify-between text-xs">
-      <div class="flex items-center gap-2 min-w-0">
-        <div class="w-7 h-7 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center font-bold text-xs shrink-0">
-          {userEmail ? userEmail.slice(0, 1).toUpperCase() : 'G'}
-        </div>
-        <div class="truncate text-left min-w-0">
-          <div class="font-medium text-slate-200 truncate">{userEmail || 'Mon Compte Google'}</div>
-          <div class="text-[10px] text-emerald-400 flex items-center gap-1">
-            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-            <span>Espace privé</span>
-          </div>
-        </div>
-      </div>
-      <button
-        type="button"
-        onclick={onLogout}
-        class="p-1.5 rounded-lg text-slate-400 hover:text-red-300 hover:bg-red-950/40 transition-colors cursor-pointer"
-        title="Se déconnecter de cette session"
-      >
-        <LogOut size={14} />
-      </button>
-    </div>
-  </div>
-
-  <!-- New Chat Button (Opens in new browser tab) -->
-  <div class="p-3">
+  <!-- Primary Action: New Chat Button (Opens in new browser tab) -->
+  <div class="px-3.5 pt-3.5 pb-2">
     <a
-      href="/"
+      href="/?c=new"
       target="_blank"
-      rel="noopener noreferrer"
-      class="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-md shadow-blue-500/20 transition-all cursor-pointer"
-      title="Ouvrir une nouvelle discussion dans un nouvel onglet de navigateur"
+      onclick={(e) => {
+        e.preventDefault();
+        window.open('/?c=new', '_blank');
+      }}
+      class="group relative w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 via-indigo-600 to-violet-600 bg-[length:200%_auto] hover:bg-right text-white text-xs font-semibold shadow-lg shadow-violet-600/20 border border-white/15 transition-all duration-300 cursor-pointer"
+      title="Ouvrir une nouvelle discussion dans un nouvel onglet"
     >
-      <Plus size={16} />
-      <span>New Chat (Nouvel onglet)</span>
-      <ExternalLink size={12} class="opacity-60" />
+      <span class="flex items-center gap-2">
+        <Plus size={15} class="transition-transform group-hover:rotate-90" />
+        <span>Nouvelle Session</span>
+      </span>
+      <span class="flex items-center gap-1 text-[10px] font-mono bg-black/25 px-1.5 py-0.5 rounded-md text-violet-100">
+        <span>Agent</span>
+        <Sparkles size={10} />
+      </span>
     </a>
   </div>
 
-  <!-- Model Selector Dropdown -->
-  <div class="px-3 pb-2">
-    <label for="model-select" class="block text-[11px] font-medium text-slate-400 mb-1 flex items-center gap-1">
-      <Cpu size={12} class="text-indigo-400" />
-      Model
-    </label>
-    <select
-      id="model-select"
-      value={selectedModel}
-      onchange={(e) => onSelectModel((e.target as HTMLSelectElement).value)}
-      class="w-full bg-[#181c28] border border-slate-800 text-slate-200 text-xs rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-500 transition-colors cursor-pointer"
-    >
-      {#each models as model}
-        <option value={model.id}>{model.name}</option>
-      {/each}
-      {#if models.length === 0}
-        <option value="gemini-3.8-flash-high">Gemini 3.8 Flash (High)</option>
-        <option value="gemini-3.8-flash-medium">Gemini 3.8 Flash (Medium)</option>
-        <option value="gemini-3.8-flash-low">Gemini 3.8 Flash (Low)</option>
-      {/if}
-    </select>
+  <!-- Model Selector -->
+  <div class="px-3.5 py-2">
+    <div class="p-2.5 rounded-xl bg-white/[0.02] border border-white/[0.06] space-y-1.5">
+      <label
+        for="sidebar-model-select"
+        class="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 flex items-center gap-1.5"
+      >
+        <Cpu size={11} class="text-violet-400" />
+        <span>Moteur actif</span>
+      </label>
+      <select
+        id="sidebar-model-select"
+        value={selectedModel}
+        onchange={(e) => onSelectModel((e.target as HTMLSelectElement).value)}
+        class="w-full bg-[#0c0f17] border border-white/[0.08] hover:border-violet-500/40 text-zinc-200 text-xs font-medium rounded-lg px-2.5 py-1.5 outline-none focus:border-violet-500 transition-colors cursor-pointer"
+      >
+        {#each models as model}
+          <option value={model.id} class="bg-[#0c0f17] text-zinc-200">{model.name}</option>
+        {/each}
+        {#if models.length === 0}
+          <option value="gemini-3.8-flash-high" class="bg-[#0c0f17] text-zinc-200">Gemini 3.8 Flash (High)</option>
+          <option value="gemini-3.8-flash-medium" class="bg-[#0c0f17] text-zinc-200">Gemini 3.8 Flash (Medium)</option>
+          <option value="gemini-3.8-flash-low" class="bg-[#0c0f17] text-zinc-200">Gemini 3.8 Flash (Low)</option>
+        {/if}
+      </select>
+    </div>
   </div>
 
-  <!-- Search input -->
-  <div class="px-3 py-1">
-    <input
-      type="text"
-      bind:value={searchQuery}
-      placeholder="Search history..."
-      class="w-full bg-[#141722] border border-slate-800/80 text-slate-300 text-xs rounded-lg px-3 py-1.5 placeholder-slate-500 outline-none focus:border-slate-700"
-    />
+  <!-- Search Input -->
+  <div class="px-3.5 py-1.5">
+    <div class="relative">
+      <Search size={13} class="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+      <input
+        type="text"
+        bind:value={searchQuery}
+        placeholder="Filtrer l'historique..."
+        class="w-full bg-white/[0.03] border border-white/[0.06] focus:border-violet-500/50 text-zinc-200 text-xs rounded-xl pl-8 pr-3 py-1.5 placeholder-zinc-500 outline-none transition-all"
+      />
+    </div>
   </div>
 
   <!-- Conversation History List (Opens in new browser tab) -->
-  <div class="flex-1 overflow-y-auto px-2 py-2 space-y-1">
+  <div class="flex-1 overflow-y-auto px-2.5 py-2 space-y-1">
     <div class="px-2 py-1 flex items-center justify-between">
-      <span class="text-[10px] font-semibold tracking-wider text-slate-500 uppercase">
-        Conversations ({filteredConversations.length})
+      <span class="text-[10px] font-bold tracking-wider text-zinc-500 uppercase">
+        Historique ({filteredConversations.length})
       </span>
       {#if conversations.length > 0 && onClearAllConversations}
         <button
           type="button"
           onclick={onClearAllConversations}
-          class="text-[10px] text-slate-500 hover:text-red-400 transition-colors cursor-pointer flex items-center gap-1"
-          title="Supprimer définitivement toutes les conversations"
+          class="text-[10px] text-zinc-500 hover:text-rose-400 transition-colors cursor-pointer flex items-center gap-1"
+          title="Purger l'historique"
         >
           <Trash2 size={11} />
-          <span>Effacer</span>
+          <span>Purger</span>
         </button>
       {/if}
     </div>
 
-    {#each filteredConversations as conv}
+    {#each filteredConversations as conv (conv.conversation_id)}
       <div
-        class="group relative flex items-center justify-between w-full rounded-xl transition-all {
+        class="group relative flex items-center justify-between w-full rounded-xl transition-all duration-150 {
           currentConversationId === conv.conversation_id
-            ? 'bg-blue-600/15 border border-blue-500/30 text-blue-200 shadow-sm'
-            : 'hover:bg-slate-800/60 text-slate-300 border border-transparent'
+            ? 'bg-violet-500/15 border border-violet-500/30 text-white shadow-xs'
+            : 'hover:bg-white/[0.04] text-zinc-300 border border-transparent hover:border-white/[0.05]'
         }"
       >
         <a
           href={`/?c=${conv.conversation_id}`}
           target="_blank"
-          rel="noopener noreferrer"
-          class="flex-1 min-w-0 p-2.5 flex items-start gap-2.5 text-xs"
-          title={`Ouvrir "${conv.title || conv.preview || 'Discussion'}" dans un nouvel onglet`}
+          onclick={(e) => {
+            e.preventDefault();
+            window.open(`/?c=${conv.conversation_id}`, '_blank');
+          }}
+          class="flex-1 min-w-0 p-2.5 flex items-start gap-2.5 text-xs text-left cursor-pointer"
+          title={`Ouvrir "${conv.title || conv.preview || 'Session'}" dans un nouvel onglet`}
         >
-          <MessageSquare size={14} class="shrink-0 mt-0.5 {currentConversationId === conv.conversation_id ? 'text-blue-400' : 'text-slate-500 group-hover:text-blue-400'}" />
+          <div class="p-1.5 rounded-lg bg-white/[0.04] group-hover:bg-violet-500/15 transition-colors mt-0.5">
+            <MessageSquare
+              size={12}
+              class="shrink-0 {currentConversationId === conv.conversation_id ? 'text-violet-400' : 'text-zinc-500 group-hover:text-violet-300'}"
+            />
+          </div>
           <div class="flex-1 min-w-0">
-            <div class="font-medium truncate leading-tight group-hover:text-white">
-              {conv.title || conv.preview || 'Untitled conversation'}
+            <div class="font-medium truncate leading-snug group-hover:text-white transition-colors">
+              {conv.title || conv.preview || 'Session sans titre'}
             </div>
-            <div class="text-[10px] text-slate-500 flex items-center justify-between mt-1">
-              <span>{conv.step_count} turns</span>
-              <span>{formatDate(conv.last_modified_time)}</span>
+            <div class="text-[10px] text-zinc-500 flex items-center gap-2 mt-1 font-mono">
+              <span>{conv.step_count || 1} étapes</span>
+              <span>•</span>
+              <span>{formatRelativeDate(conv.last_modified_time)}</span>
             </div>
           </div>
         </a>
@@ -222,7 +230,7 @@
               e.stopPropagation();
               onDeleteConversation?.(conv.conversation_id);
             }}
-            class="p-1.5 mr-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-950/40 opacity-0 group-hover:opacity-100 transition-all cursor-pointer shrink-0"
+            class="p-1.5 mr-1.5 rounded-lg text-zinc-500 hover:text-rose-400 hover:bg-rose-500/10 opacity-0 group-hover:opacity-100 transition-all cursor-pointer shrink-0"
             title="Supprimer cette discussion"
           >
             <Trash2 size={13} />
@@ -232,41 +240,74 @@
     {/each}
 
     {#if filteredConversations.length === 0}
-      <div class="text-center py-8 text-xs text-slate-500">
-        No conversations found
+      <div class="text-center py-10 px-4">
+        <div class="w-8 h-8 rounded-full bg-white/[0.03] border border-white/[0.06] flex items-center justify-center mx-auto mb-2 text-zinc-600">
+          <MessageSquare size={14} />
+        </div>
+        <p class="text-xs text-zinc-500">Aucune conversation trouvée</p>
       </div>
     {/if}
   </div>
 
-  <!-- Footer / Terminal & Settings Buttons -->
-  <div class="p-3 border-t border-slate-800/60 flex flex-col gap-1.5">
-    <button
-      type="button"
-      onclick={onOpenTerminal}
-      class="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-slate-800 {isAuthenticated ? 'text-slate-300' : 'bg-amber-950/40 text-amber-300 border border-amber-800/40'} text-xs font-medium transition-colors w-full cursor-pointer"
-      title="Ouvrir le terminal pour se connecter avec Google"
-    >
-      <Terminal size={15} />
-      <span>{isAuthenticated ? 'Terminal Web' : 'Connecter Compte Google'}</span>
-    </button>
+  <!-- Bottom Control Dock & User Profile -->
+  <div class="p-3 border-t border-white/[0.06] bg-[#06070b]/60 space-y-2">
+    <div class="grid grid-cols-3 gap-1.5">
+      <button
+        type="button"
+        onclick={onOpenTerminal}
+        class="flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/[0.05] text-zinc-300 hover:text-white text-[10px] font-medium transition-all cursor-pointer"
+        title="Terminal Web"
+      >
+        <Terminal size={14} class="text-cyan-400" />
+        <span>Terminal</span>
+      </button>
 
-    <button
-      type="button"
-      onclick={onOpenApiKeyModal}
-      class="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-slate-800 text-slate-300 text-xs font-medium transition-colors w-full cursor-pointer"
-      title="Afficher ma clé API et exemples curl/python"
-    >
-      <Key size={15} class="text-indigo-400" />
-      <span>Clé API Développeur</span>
-    </button>
+      {#if onOpenApiKeyModal}
+        <button
+          type="button"
+          onclick={onOpenApiKeyModal}
+          class="flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/[0.05] text-zinc-300 hover:text-white text-[10px] font-medium transition-all cursor-pointer"
+          title="Clé API & SDK"
+        >
+          <Key size={14} class="text-violet-400" />
+          <span>Clé API</span>
+        </button>
+      {/if}
 
-    <button
-      type="button"
-      onclick={onOpenSettings}
-      class="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-slate-800 text-slate-300 text-xs font-medium transition-colors w-full cursor-pointer"
-    >
-      <SettingsIcon size={15} />
-      <span>Settings & Remote</span>
-    </button>
+      <button
+        type="button"
+        onclick={onOpenSettings}
+        class="flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/[0.05] text-zinc-300 hover:text-white text-[10px] font-medium transition-all cursor-pointer"
+        title="Paramètres & Accès distant"
+      >
+        <SettingsIcon size={14} class="text-amber-400" />
+        <span>Réglages</span>
+      </button>
+    </div>
+
+    <!-- User Card -->
+    <div class="p-2 rounded-xl bg-white/[0.02] border border-white/[0.06] flex items-center justify-between">
+      <div class="flex items-center gap-2.5 min-w-0">
+        <div class="w-7 h-7 rounded-lg bg-gradient-to-tr from-violet-600 to-cyan-500 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
+          {userEmail ? userEmail.slice(0, 1).toUpperCase() : 'G'}
+        </div>
+        <div class="truncate text-left min-w-0">
+          <div class="font-semibold text-zinc-200 text-xs truncate">
+            {userEmail || 'Guillaume'}
+          </div>
+          <div class="text-[10px] text-emerald-400/90 flex items-center gap-1 font-medium">
+            <span>Session isolée</span>
+          </div>
+        </div>
+      </div>
+      <button
+        type="button"
+        onclick={onLogout}
+        class="p-1.5 rounded-lg text-zinc-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+        title="Se déconnecter"
+      >
+        <LogOut size={14} />
+      </button>
+    </div>
   </div>
 </aside>

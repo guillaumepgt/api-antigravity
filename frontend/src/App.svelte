@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, onDestroy } from 'svelte';
   import Sidebar from './lib/Sidebar.svelte';
   import MainPage from './lib/MainPage.svelte';
   import MessageItem from './lib/Message.svelte';
   import InputBar from './lib/InputBar.svelte';
   import SettingsModal from './lib/SettingsModal.svelte';
   import ApiKeyModal from './lib/ApiKeyModal.svelte';
+  import AuthModal from './lib/AuthModal.svelte';
   import {
     checkHealth,
     fetchMe,
@@ -37,6 +38,12 @@
     Cpu,
     X,
     Trash2,
+    Sparkles,
+    Compass,
+    Zap,
+    Code2,
+    Maximize2,
+    Minimize2,
   } from 'lucide-svelte';
 
   function checkHasStoredAuth(): boolean {
@@ -68,6 +75,7 @@
   let isLoadingTranscript = $state(false);
   let isChatMode = $state(false);
   let isTerminalOpen = $state(false);
+  let isTerminalMaximized = $state(false);
   let terminalUrl = $state<string>('');
   let isLoggingIn = $state(false);
   let isSettingsOpen = $state(false);
@@ -84,8 +92,13 @@
     models.find((m) => m.id === settings.selectedModel)?.name || settings.selectedModel
   );
 
+  let activeConv = $derived(conversations.find((c) => c.conversation_id === currentConversationId));
+  let activeTitle = $derived(
+    activeConv?.title || activeConv?.preview || (messages.length > 0 && messages[0].role === 'user' ? messages[0].content : 'Nouvelle Session')
+  );
+
   let currentConversationTitle = $derived(
-    conversations.find((c) => c.conversation_id === currentConversationId)?.title ||
+    activeConv?.title ||
       (messages.length > 0 && messages[0].role === 'user' ? messages[0].content.slice(0, 30) : '')
   );
 
@@ -122,9 +135,68 @@
       isChatMode = false;
     }
 
+    // Inter-tab synchronization via BroadcastChannel
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        syncChannel = new BroadcastChannel('antigravity_tab_sync');
+        syncChannel.onmessage = (event) => {
+          if (event.data?.type === 'CONVERSATION_DELETED') {
+            const deletedId = event.data.id;
+            conversations = conversations.filter((c) => c.conversation_id !== deletedId);
+            if (currentConversationId === deletedId) {
+              returnToMainTab();
+            }
+          } else if (event.data?.type === 'CONVERSATIONS_CLEARED') {
+            conversations = [];
+            if (isChatMode) {
+              returnToMainTab();
+            }
+          } else if (event.data?.type === 'REFRESH_CONVERSATIONS') {
+            fetchConversations(settings.apiKey)
+              .then((c) => (conversations = c))
+              .catch(() => {});
+          }
+        };
+      } catch {}
+    }
+
     // Authenticate & load secondary metadata in parallel
     initApp();
   });
+
+  onDestroy(() => {
+    try {
+      syncChannel?.close();
+    } catch {}
+  });
+
+  let syncChannel: BroadcastChannel | null = null;
+
+  function broadcastSync(data: Record<string, unknown>) {
+    try {
+      syncChannel?.postMessage(data);
+    } catch {}
+  }
+
+  function returnToMainTab() {
+    let hasOpener = false;
+    try {
+      if (window.opener && !window.opener.closed) {
+        hasOpener = true;
+        window.opener.focus();
+      }
+    } catch {}
+
+    // Close this chat tab so the user returns to the main cockpit tab
+    window.close();
+
+    // Fallback if window.close() is blocked by browser security
+    setTimeout(() => {
+      if (!window.closed && !hasOpener) {
+        window.location.href = '/';
+      }
+    }, 200);
+  }
 
   async function initApp() {
     try {
@@ -287,11 +359,13 @@
     try {
       await deleteConversation(id, settings.apiKey);
       conversations = conversations.filter((c) => c.conversation_id !== id);
+      broadcastSync({ type: 'CONVERSATION_DELETED', id });
+
       if (currentConversationId === id) {
         messages = [];
         currentConversationId = null;
         if (isChatMode) {
-          window.location.href = '/';
+          returnToMainTab();
         } else {
           window.history.replaceState({}, '', '/');
           isChatMode = false;
@@ -317,8 +391,10 @@
       conversations = [];
       messages = [];
       currentConversationId = null;
+      broadcastSync({ type: 'CONVERSATIONS_CLEARED' });
+
       if (isChatMode) {
-        window.location.href = '/';
+        returnToMainTab();
       } else {
         window.history.replaceState({}, '', '/');
         isChatMode = false;
@@ -449,6 +525,7 @@
             if (data.conversation_id && !currentConversationId) {
               currentConversationId = data.conversation_id;
               window.history.replaceState({}, '', `/?c=${data.conversation_id}`);
+              broadcastSync({ type: 'REFRESH_CONVERSATIONS' });
               fetchConversations(settings.apiKey)
                 .then((c) => (conversations = c))
                 .catch(() => {});
@@ -522,46 +599,15 @@
   <title>{pageTitle}</title>
 </svelte:head>
 
-<div class="h-screen w-screen overflow-hidden bg-[#0c0e15] text-slate-100 flex flex-col">
+<div class="h-screen w-screen overflow-hidden bg-[#06070b] text-zinc-100 flex flex-col font-sans select-none">
   {#if isCheckingAuth && !isAuthenticated}
-    <!-- Minimalist neutral loading state while verifying credentials (never flashes the login screen!) -->
-    <div class="h-full flex-1 flex flex-col items-center justify-center p-6 text-center select-none bg-[#0c0e15]">
-      <div class="w-8 h-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin mb-3"></div>
-      <p class="text-xs text-slate-400">Chargement de votre session...</p>
+    <!-- Minimalist neutral loading state while verifying credentials -->
+    <div class="h-full flex-1 flex flex-col items-center justify-center p-6 text-center select-none bg-[#06070b]">
+      <div class="w-8 h-8 rounded-full border-2 border-violet-500 border-t-transparent animate-spin mb-3"></div>
+      <p class="text-xs text-zinc-400">Chargement de votre session...</p>
     </div>
   {:else if !isAuthenticated}
-    <!-- Unauthenticated Google Login Hero -->
-    <div class="h-full flex-1 flex flex-col items-center justify-center p-6 text-center select-none bg-gradient-to-b from-[#0c0e15] to-[#0f111a]">
-      <div class="w-16 h-16 rounded-2xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-purple-600 flex items-center justify-center text-white shadow-2xl shadow-blue-500/30 mb-6">
-        <Bot size={34} />
-      </div>
-      <h1 class="text-2xl sm:text-3xl font-bold text-white tracking-tight">Antigravity AI Agent</h1>
-      <p class="text-xs sm:text-sm text-slate-400 mt-2 max-w-md leading-relaxed">
-        Connectez-vous avec votre compte Google personnel pour accéder à votre espace de travail privé, vos modèles et vos conversations.
-      </p>
-
-      <div class="mt-8 flex flex-col sm:flex-row items-center gap-3">
-        <button
-          type="button"
-          onclick={handleStartGoogleLogin}
-          disabled={isLoggingIn}
-          class="px-6 py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold shadow-xl shadow-blue-500/25 flex items-center gap-3 transition-all cursor-pointer disabled:opacity-50"
-        >
-          <Terminal size={18} />
-          <span>{isLoggingIn ? 'Ouverture de la session...' : 'Connexion avec mon compte Google'}</span>
-        </button>
-      </div>
-
-      <div class="mt-12 p-4 rounded-xl bg-slate-900/60 border border-slate-800/80 max-w-sm text-left">
-        <div class="flex items-center gap-2 text-xs font-semibold text-slate-300">
-          <ShieldCheck size={16} class="text-emerald-400" />
-          <span>Confidentialité & Sessions Sécurisées</span>
-        </div>
-        <p class="text-[11px] text-slate-400 mt-1.5 leading-normal">
-          Vos conversations et fichiers sont strictement isolés dans votre compte. Aucun autre utilisateur ne peut accéder à votre session.
-        </p>
-      </div>
-    </div>
+    <AuthModal {isLoggingIn} onStartLogin={handleStartGoogleLogin} />
   {:else if !isChatMode}
     <!-- PAGE PRINCIPALE (Cockpit avec Sidebar pour un accès direct et permanent à tous ses chats existants!) -->
     <div class="flex h-full w-full overflow-hidden">
@@ -612,119 +658,152 @@
       </div>
     </div>
   {:else}
-    <!-- STANDALONE CHAT: SANS AUCUN BANDEAU, SEULEMENT LE CHAT -->
-    <div class="flex-1 flex flex-col h-full w-full bg-[#0f111a] relative overflow-hidden">
-      <!-- Minimalist Floating Top Controls (zero layout space, unobtrusive) -->
-      <div class="absolute top-3 left-4 right-4 z-20 flex items-center justify-between pointer-events-none">
-        <a
-          href="/"
-          class="pointer-events-auto flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-900/85 hover:bg-slate-800 border border-slate-800/80 text-slate-400 hover:text-slate-100 text-xs backdrop-blur-md shadow-lg transition-all"
-          title="Retourner à la page principale"
-        >
-          <ArrowLeft size={13} />
-          <span class="font-medium">Accueil</span>
-        </a>
+    <!-- STANDALONE DEDICATED CHAT VIEW -->
+    <div class="flex-1 flex flex-col h-full w-full bg-[#06070b] bg-cosmic-grid relative overflow-hidden select-text font-sans">
+      <div class="pointer-events-none fixed top-[-220px] left-1/2 -translate-x-1/2 w-[650px] h-[340px] bg-violet-600/10 rounded-full blur-[140px]"></div>
 
-        <div class="pointer-events-auto flex items-center gap-2">
+      <!-- Floating Glass Header -->
+      <header class="sticky top-0 z-20 px-4 py-2.5 flex items-center justify-between gap-3 border-b border-white/[0.06] bg-[#06070b]/80 backdrop-blur-xl select-none">
+        <div class="flex items-center gap-3 min-w-0">
+          <button
+            type="button"
+            onclick={returnToMainTab}
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.07] text-zinc-300 hover:text-white text-xs font-medium transition-all cursor-pointer shrink-0"
+            title="Retourner au Cockpit"
+          >
+            <ArrowLeft size={13} />
+            <span>Cockpit</span>
+          </button>
+
+          <div class="h-4 w-[1px] bg-white/[0.08] hidden sm:block"></div>
+
+          <div class="truncate text-xs font-semibold text-zinc-200 hidden sm:block max-w-md">
+            {activeTitle}
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2 shrink-0">
           {#if currentConversationId}
             <button
               type="button"
               onclick={() => currentConversationId && handleDeleteConversation(currentConversationId)}
-              class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-slate-900/85 hover:bg-red-950/60 border border-slate-800/80 hover:border-red-800/40 text-slate-400 hover:text-red-300 text-xs backdrop-blur-md shadow-sm transition-all cursor-pointer"
-              title="Supprimer cette discussion"
+              class="p-2 rounded-xl bg-white/[0.03] hover:bg-rose-500/15 border border-white/[0.07] hover:border-rose-500/30 text-zinc-400 hover:text-rose-300 text-xs transition-all cursor-pointer"
+              title="Supprimer cette session"
             >
               <Trash2 size={13} />
             </button>
           {/if}
-          <div class="pointer-events-auto flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900/90 hover:bg-slate-800 border border-slate-800/80 text-[11px] text-slate-300 backdrop-blur-md shadow-sm transition-all">
-            <Cpu size={12} class="text-indigo-400 shrink-0" />
+
+          <button
+            type="button"
+            onclick={handleOpenTerminal}
+            class="p-2 rounded-xl bg-white/[0.03] hover:bg-white/[0.08] border border-white/[0.07] text-cyan-400 text-xs transition-all cursor-pointer"
+            title="Ouvrir le terminal"
+          >
+            <Terminal size={13} />
+          </button>
+
+          <div class="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.07] text-xs transition-colors">
+            <Cpu size={12} class="text-violet-400 shrink-0" />
             <select
               value={settings.selectedModel}
               onchange={(e) => handleSelectModel((e.target as HTMLSelectElement).value)}
-              class="bg-transparent text-slate-200 outline-none cursor-pointer pr-1 text-[11px] font-medium"
+              class="bg-transparent text-xs font-semibold text-zinc-200 outline-none cursor-pointer pr-1"
               title="Changer de modèle ou niveau de réflexion"
             >
               {#each models as model}
-                <option value={model.id} class="bg-[#141722] text-slate-200">{model.name}</option>
+                <option value={model.id} class="bg-[#0c0e16] text-zinc-200">{model.name}</option>
               {/each}
               {#if models.length === 0}
-                <option value="gemini-3.8-flash-high" class="bg-[#141722] text-slate-200">Gemini 3.8 Flash (High)</option>
-                <option value="gemini-3.8-flash-medium" class="bg-[#141722] text-slate-200">Gemini 3.8 Flash (Medium)</option>
-                <option value="gemini-3.8-flash-low" class="bg-[#141722] text-slate-200">Gemini 3.8 Flash (Low)</option>
+                <option value="gemini-3.8-flash-high" class="bg-[#0c0e16] text-zinc-200">Gemini 3.8 Flash (High)</option>
+                <option value="gemini-3.8-flash-medium" class="bg-[#0c0e16] text-zinc-200">Gemini 3.8 Flash (Medium)</option>
+                <option value="gemini-3.8-flash-low" class="bg-[#0c0e16] text-zinc-200">Gemini 3.8 Flash (Low)</option>
               {/if}
             </select>
           </div>
+
           <a
             href="/?c=new"
             target="_blank"
-            rel="noopener noreferrer"
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-blue-600/20 hover:bg-blue-600/35 border border-blue-500/30 text-blue-300 hover:text-blue-100 text-xs font-medium backdrop-blur-md shadow-sm transition-all"
+            onclick={(e) => {
+              e.preventDefault();
+              window.open('/?c=new', '_blank');
+            }}
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 text-violet-200 text-xs font-semibold transition-all cursor-pointer"
             title="Ouvrir un nouveau chat dans un autre onglet"
           >
             <Plus size={13} />
-            <span class="hidden sm:inline">Nouveau chat</span>
+            <span class="hidden sm:inline">Nouvelle Session</span>
           </a>
         </div>
-      </div>
+      </header>
 
       <!-- Message Scroll Area -->
       <div
         bind:this={chatContainerEl}
-        class="flex-1 overflow-y-auto px-2 sm:px-4 pt-14 pb-4 scroll-smooth"
+        class="flex-1 overflow-y-auto px-2 sm:px-4 pt-4 pb-6 scroll-smooth relative z-10"
       >
         {#if isLoadingTranscript}
-          <div class="h-full flex flex-col items-center justify-center text-center p-4 text-slate-400 select-none">
-            <div class="w-7 h-7 rounded-full border-2 border-blue-500 border-t-transparent animate-spin mb-3"></div>
-            <span class="text-xs font-medium text-slate-300">Chargement de la discussion...</span>
+          <div class="h-full flex flex-col items-center justify-center text-center p-4 text-zinc-400 select-none">
+            <div class="w-8 h-8 rounded-full border-2 border-violet-500 border-t-transparent animate-spin mb-3"></div>
+            <span class="text-xs font-medium text-zinc-300">Chargement de la discussion...</span>
           </div>
         {:else if messages.length === 0}
-          <div class="h-full flex flex-col items-center justify-center text-center px-4 max-w-lg mx-auto select-none">
-            <div class="w-14 h-14 rounded-2xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-purple-600 flex items-center justify-center text-white shadow-xl shadow-blue-500/20 mb-4">
-              <Bot size={28} />
+          <div class="h-full flex flex-col items-center justify-center text-center px-4 max-w-xl mx-auto select-none my-auto py-12">
+            <div class="w-14 h-14 rounded-2xl bg-gradient-to-tr from-violet-600 via-indigo-600 to-cyan-500 flex items-center justify-center text-white shadow-xl shadow-violet-600/25 mb-4 border border-white/20">
+              <Sparkles size={26} />
             </div>
-            <h2 class="text-xl font-bold text-slate-100 tracking-tight">Nouvelle discussion</h2>
-            <p class="text-xs text-slate-400 mt-2 leading-relaxed">
-              Votre espace privé est prêt. Posez votre question ou décrivez votre tâche.
+            <h3 class="text-xl font-extrabold text-white tracking-tight">
+              Session Autonome Prête
+            </h3>
+            <p class="text-xs sm:text-sm text-zinc-400 mt-2 max-w-md leading-relaxed">
+              Posez une question, lancez un script shell ou ordonnez une modification de code. L'agent Antigravity exécutera vos outils en toute fluidité.
             </p>
-
-            <div class="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#141722] border border-slate-700/80 text-xs">
-              <Cpu size={13} class="text-indigo-400 shrink-0" />
-              <span class="text-slate-400">Modèle :</span>
-              <select
-                value={settings.selectedModel}
-                onchange={(e) => handleSelectModel((e.target as HTMLSelectElement).value)}
-                class="bg-transparent text-indigo-300 hover:text-indigo-200 font-semibold outline-none cursor-pointer"
-                title="Changer de modèle"
-              >
-                {#each models as model}
-                  <option value={model.id} class="bg-[#141722] text-slate-200 font-normal">{model.name}</option>
-                {/each}
-              </select>
-            </div>
 
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mt-8 w-full text-left">
               <button
                 type="button"
-                onclick={() => handleSend("Explain what is in this workspace and summarize the architecture.")}
-                class="p-3 rounded-xl bg-[#181c28] border border-slate-800 hover:border-blue-500/50 hover:bg-slate-800/60 text-xs text-slate-300 transition-all cursor-pointer"
+                onclick={() => handleSend("Explique-moi l’architecture du projet et les technologies utilisées.")}
+                class="p-3 rounded-2xl bg-white/[0.02] hover:bg-white/[0.05] border border-white/[0.07] hover:border-violet-500/30 text-xs text-zinc-300 transition-all cursor-pointer flex items-center gap-2.5"
               >
-                <div class="font-medium text-slate-200">🔍 Inspect Workspace</div>
-                <div class="text-[11px] text-slate-500 mt-0.5">Explore files and architecture</div>
+                <Compass size={15} class="text-violet-400 shrink-0" />
+                <span>Expliquer l'architecture du projet</span>
               </button>
+
               <button
                 type="button"
-                onclick={() => handleSend("What tools and capabilities do you have available?")}
-                class="p-3 rounded-xl bg-[#181c28] border border-slate-800 hover:border-blue-500/50 hover:bg-slate-800/60 text-xs text-slate-300 transition-all cursor-pointer"
+                onclick={() => handleSend("Quels outils et MCP sont configurés sur ce nœud ?")}
+                class="p-3 rounded-2xl bg-white/[0.02] hover:bg-white/[0.05] border border-white/[0.07] hover:border-cyan-500/30 text-xs text-zinc-300 transition-all cursor-pointer flex items-center gap-2.5"
               >
-                <div class="font-medium text-slate-200">⚡ Check Capabilities</div>
-                <div class="text-[11px] text-slate-500 mt-0.5">List available tools and agents</div>
+                <Zap size={15} class="text-cyan-400 shrink-0" />
+                <span>Lister les outils & MCP disponibles</span>
+              </button>
+
+              <button
+                type="button"
+                onclick={() => handleSend("Effectue un audit de sécurité et de propreté du code.")}
+                class="p-3 rounded-2xl bg-white/[0.02] hover:bg-white/[0.05] border border-white/[0.07] hover:border-emerald-500/30 text-xs text-zinc-300 transition-all cursor-pointer flex items-center gap-2.5"
+              >
+                <Code2 size={15} class="text-emerald-400 shrink-0" />
+                <span>Auditer la qualité du code</span>
+              </button>
+
+              <button
+                type="button"
+                onclick={handleOpenTerminal}
+                class="p-3 rounded-2xl bg-white/[0.02] hover:bg-white/[0.05] border border-white/[0.07] hover:border-amber-500/30 text-xs text-zinc-300 transition-all cursor-pointer flex items-center gap-2.5"
+              >
+                <Terminal size={15} class="text-amber-400 shrink-0" />
+                <span>Ouvrir la console shell bash</span>
               </button>
             </div>
           </div>
         {:else}
-          {#each messages as msg (msg.id)}
-            <MessageItem message={msg} />
-          {/each}
+          <div class="space-y-1">
+            {#each messages as msg (msg.id)}
+              <MessageItem message={msg} />
+            {/each}
+          </div>
         {/if}
       </div>
 
@@ -754,15 +833,37 @@
 
   <!-- Interactive Web Terminal Modal (Google OAuth / Shell) -->
   {#if isTerminalOpen}
-    <div class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6">
-      <div class="bg-[#10131d] border border-slate-800 rounded-2xl w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden shadow-2xl">
-        <div class="px-4 py-3 border-b border-slate-800 flex items-center justify-between bg-[#0a0c13]">
+    <div class="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 font-mono">
+      <div
+        class="bg-[#050609] border border-white/[0.1] rounded-2xl shadow-2xl overflow-hidden flex flex-col transition-all duration-200 {isTerminalMaximized ? 'w-full h-full' : 'w-full max-w-4xl h-[85vh]'}"
+      >
+        <!-- Terminal Header -->
+        <div class="bg-[#0b0e17] px-4 py-3 border-b border-white/[0.08] flex items-center justify-between select-none">
           <div class="flex items-center gap-2">
-            <Terminal size={16} class="text-blue-400" />
-            <span class="text-xs font-semibold text-slate-200">
-              {activeLoginId ? 'Connexion Google OAuth Antigravity' : 'Terminal Web Personnel'}
-            </span>
+            <div class="flex items-center gap-1.5 mr-2">
+              <button
+                type="button"
+                onclick={handleCloseTerminal}
+                class="w-3 h-3 rounded-full bg-rose-500/80 hover:bg-rose-500 inline-block cursor-pointer"
+                title="Fermer"
+              ></button>
+              <button
+                type="button"
+                onclick={() => (isTerminalMaximized = !isTerminalMaximized)}
+                class="w-3 h-3 rounded-full bg-amber-500/80 hover:bg-amber-500 inline-block cursor-pointer"
+                title="Agrandir"
+              ></button>
+              <span class="w-3 h-3 rounded-full bg-emerald-500/80 inline-block"></span>
+            </div>
+
+            <div class="flex items-center gap-2 text-xs text-zinc-300">
+              <Terminal size={14} class="text-cyan-400" />
+              <span class="font-semibold text-zinc-200">
+                {activeLoginId ? 'oauth — Connexion Google Antigravity' : 'bash — antigravity-worker-01'}
+              </span>
+            </div>
           </div>
+
           <div class="flex items-center gap-2">
             {#if activeLoginId}
               <button
@@ -778,17 +879,28 @@
                     }
                   }
                 }}
-                class="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-all cursor-pointer"
+                class="px-3 py-1 rounded-lg bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-xs transition-all cursor-pointer"
               >
                 Valider ma connexion
               </button>
             {/if}
             <button
               type="button"
-              onclick={handleCloseTerminal}
-              class="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 cursor-pointer"
+              onclick={() => (isTerminalMaximized = !isTerminalMaximized)}
+              class="p-1 rounded text-zinc-400 hover:text-white cursor-pointer"
             >
-              <X size={16} />
+              {#if isTerminalMaximized}
+                <Minimize2 size={14} />
+              {:else}
+                <Maximize2 size={14} />
+              {/if}
+            </button>
+            <button
+              type="button"
+              onclick={handleCloseTerminal}
+              class="p-1 rounded text-zinc-400 hover:text-white cursor-pointer"
+            >
+              <X size={15} />
             </button>
           </div>
         </div>
