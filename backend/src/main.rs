@@ -7,7 +7,7 @@ mod conversations;
 
 use axum::{
     middleware,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use config::Config;
@@ -53,10 +53,21 @@ use tower_http::services::{ServeDir, ServeFile};
     let mut app = Router::new()
         .route("/health", get(api::health_check))
         .route("/api/auth/status", get(api::auth_status))
+        .route("/api/auth/start-login", post(api::start_login))
+        .route("/api/auth/check-login", get(api::check_login))
+        .route("/api/auth/me", get(api::auth_me))
+        .route("/api/auth/logout", post(api::auth_logout))
+        .route("/api/terminal/token", post(api::create_user_terminal_token))
+        .route("/api/internal/verify-terminal-ticket", get(api::verify_terminal_ticket))
         .route("/api/user/key", get(api::get_user_key))
         .route("/api/user/key/regenerate", post(api::regenerate_user_key))
         .route("/api/models", get(api::get_models))
-        .route("/api/conversations", get(api::list_conversations))
+        .route("/api/conversations", get(api::list_conversations).delete(api::clear_conversations))
+        .route("/api/conversations/clear", post(api::clear_conversations))
+        .route(
+            "/api/conversations/{id}",
+            delete(api::delete_conversation),
+        )
         .route(
             "/api/conversations/{id}/transcript",
             get(api::get_conversation_transcript),

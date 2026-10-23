@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Conversation, Model } from './types';
-  import { Plus, MessageSquare, Settings as SettingsIcon, Radio, RefreshCw, Cpu, Terminal, Key } from 'lucide-svelte';
+  import { Plus, MessageSquare, Settings as SettingsIcon, Radio, RefreshCw, Cpu, Terminal, Key, User, LogOut, ExternalLink, Trash2 } from 'lucide-svelte';
 
   interface Props {
     conversations: Conversation[];
@@ -9,12 +9,16 @@
     selectedModel: string;
     isConnected: boolean;
     isAuthenticated: boolean;
+    userEmail: string;
     onSelectConversation: (id: string) => void;
     onNewChat: () => void;
     onSelectModel: (modelId: string) => void;
     onOpenSettings: () => void;
     onOpenTerminal: () => void;
     onOpenApiKeyModal?: () => void;
+    onDeleteConversation?: (id: string) => void;
+    onClearAllConversations?: () => void;
+    onLogout: () => void;
     onRefresh: () => void;
   }
 
@@ -25,12 +29,16 @@
     selectedModel,
     isConnected,
     isAuthenticated,
+    userEmail,
     onSelectConversation,
     onNewChat,
     onSelectModel,
     onOpenSettings,
     onOpenTerminal,
     onOpenApiKeyModal,
+    onDeleteConversation,
+    onClearAllConversations,
+    onLogout,
     onRefresh,
   }: Props = $props();
 
@@ -86,16 +94,45 @@
     </button>
   </div>
 
-  <!-- New Chat Button -->
+  <!-- Authenticated User Card -->
+  <div class="px-3 py-2 border-b border-slate-800/60">
+    <div class="w-full p-2.5 rounded-xl bg-[#141722] border border-slate-800 flex items-center justify-between text-xs">
+      <div class="flex items-center gap-2 min-w-0">
+        <div class="w-7 h-7 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center font-bold text-xs shrink-0">
+          {userEmail ? userEmail.slice(0, 1).toUpperCase() : 'G'}
+        </div>
+        <div class="truncate text-left min-w-0">
+          <div class="font-medium text-slate-200 truncate">{userEmail || 'Mon Compte Google'}</div>
+          <div class="text-[10px] text-emerald-400 flex items-center gap-1">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+            <span>Espace privé</span>
+          </div>
+        </div>
+      </div>
+      <button
+        type="button"
+        onclick={onLogout}
+        class="p-1.5 rounded-lg text-slate-400 hover:text-red-300 hover:bg-red-950/40 transition-colors cursor-pointer"
+        title="Se déconnecter de cette session"
+      >
+        <LogOut size={14} />
+      </button>
+    </div>
+  </div>
+
+  <!-- New Chat Button (Opens in new browser tab) -->
   <div class="p-3">
-    <button
-      type="button"
-      onclick={onNewChat}
+    <a
+      href="/"
+      target="_blank"
+      rel="noopener noreferrer"
       class="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-md shadow-blue-500/20 transition-all cursor-pointer"
+      title="Ouvrir une nouvelle discussion dans un nouvel onglet de navigateur"
     >
       <Plus size={16} />
-      <span>New Conversation</span>
-    </button>
+      <span>New Chat (Nouvel onglet)</span>
+      <ExternalLink size={12} class="opacity-60" />
+    </a>
   </div>
 
   <!-- Model Selector Dropdown -->
@@ -130,33 +167,67 @@
     />
   </div>
 
-  <!-- Conversation History List -->
+  <!-- Conversation History List (Opens in new browser tab) -->
   <div class="flex-1 overflow-y-auto px-2 py-2 space-y-1">
-    <div class="px-2 py-1 text-[10px] font-semibold tracking-wider text-slate-500 uppercase">
-      Conversations ({filteredConversations.length})
+    <div class="px-2 py-1 flex items-center justify-between">
+      <span class="text-[10px] font-semibold tracking-wider text-slate-500 uppercase">
+        Conversations ({filteredConversations.length})
+      </span>
+      {#if conversations.length > 0 && onClearAllConversations}
+        <button
+          type="button"
+          onclick={onClearAllConversations}
+          class="text-[10px] text-slate-500 hover:text-red-400 transition-colors cursor-pointer flex items-center gap-1"
+          title="Supprimer définitivement toutes les conversations"
+        >
+          <Trash2 size={11} />
+          <span>Effacer</span>
+        </button>
+      {/if}
     </div>
 
     {#each filteredConversations as conv}
-      <button
-        type="button"
-        onclick={() => onSelectConversation(conv.conversation_id)}
-        class="w-full text-left p-2.5 rounded-xl transition-all flex items-start gap-2.5 text-xs {
+      <div
+        class="group relative flex items-center justify-between w-full rounded-xl transition-all {
           currentConversationId === conv.conversation_id
             ? 'bg-blue-600/15 border border-blue-500/30 text-blue-200 shadow-sm'
             : 'hover:bg-slate-800/60 text-slate-300 border border-transparent'
         }"
       >
-        <MessageSquare size={14} class="shrink-0 mt-0.5 {currentConversationId === conv.conversation_id ? 'text-blue-400' : 'text-slate-500'}" />
-        <div class="flex-1 min-w-0">
-          <div class="font-medium truncate leading-tight">
-            {conv.title || conv.preview || 'Untitled conversation'}
+        <a
+          href={`/?c=${conv.conversation_id}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="flex-1 min-w-0 p-2.5 flex items-start gap-2.5 text-xs"
+          title={`Ouvrir "${conv.title || conv.preview || 'Discussion'}" dans un nouvel onglet`}
+        >
+          <MessageSquare size={14} class="shrink-0 mt-0.5 {currentConversationId === conv.conversation_id ? 'text-blue-400' : 'text-slate-500 group-hover:text-blue-400'}" />
+          <div class="flex-1 min-w-0">
+            <div class="font-medium truncate leading-tight group-hover:text-white">
+              {conv.title || conv.preview || 'Untitled conversation'}
+            </div>
+            <div class="text-[10px] text-slate-500 flex items-center justify-between mt-1">
+              <span>{conv.step_count} turns</span>
+              <span>{formatDate(conv.last_modified_time)}</span>
+            </div>
           </div>
-          <div class="text-[10px] text-slate-500 flex items-center justify-between mt-1">
-            <span>{conv.step_count} turns</span>
-            <span>{formatDate(conv.last_modified_time)}</span>
-          </div>
-        </div>
-      </button>
+        </a>
+
+        {#if onDeleteConversation}
+          <button
+            type="button"
+            onclick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onDeleteConversation?.(conv.conversation_id);
+            }}
+            class="p-1.5 mr-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-950/40 opacity-0 group-hover:opacity-100 transition-all cursor-pointer shrink-0"
+            title="Supprimer cette discussion"
+          >
+            <Trash2 size={13} />
+          </button>
+        {/if}
+      </div>
     {/each}
 
     {#if filteredConversations.length === 0}

@@ -32,10 +32,14 @@ pub struct ModelInfo {
     pub name: String,
 }
 
-pub async fn list_models(config: &Config) -> Vec<ModelInfo> {
+pub async fn list_models(config: &Config, user: Option<&str>) -> Vec<ModelInfo> {
+    config.ensure_user_dirs(user);
     let mut cmd = Command::new(&config.agy_bin);
     cmd.arg("models");
+    cmd.env("HOME", config.get_user_home(user));
     cmd.env("GEMINI_FORCE_FILE_STORAGE", "true");
+    cmd.env("GEMINI_CLI_DIR", config.get_user_gemini_cli_dir(user));
+    cmd.current_dir(config.get_user_workspace_dir(user));
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
@@ -46,12 +50,10 @@ pub async fn list_models(config: &Config) -> Vec<ModelInfo> {
 
             for line in stdout.lines() {
                 let trimmed = line.trim();
-                // Skip loading spinner lines or empty lines
                 if trimmed.is_empty() || trimmed.contains("Fetching available models") {
                     continue;
                 }
 
-                // Format: <id> <whitespace> <name>
                 let parts: Vec<&str> = trimmed.split_whitespace().collect();
                 if parts.len() >= 2 {
                     let id = parts[0].to_string();
@@ -109,11 +111,15 @@ pub async fn list_models(config: &Config) -> Vec<ModelInfo> {
 
 pub async fn execute_chat_sync(
     config: &Config,
+    user: Option<&str>,
     req: &ChatRequest,
 ) -> Result<serde_json::Value, String> {
+    config.ensure_user_dirs(user);
     let mut cmd = Command::new(&config.agy_bin);
-    cmd.current_dir(&config.workspace_dir);
+    cmd.current_dir(config.get_user_workspace_dir(user));
+    cmd.env("HOME", config.get_user_home(user));
     cmd.env("GEMINI_FORCE_FILE_STORAGE", "true");
+    cmd.env("GEMINI_CLI_DIR", config.get_user_gemini_cli_dir(user));
     cmd.arg("-p").arg(&req.prompt);
     cmd.arg("--output-format").arg("json");
 
@@ -165,14 +171,18 @@ pub async fn execute_chat_sync(
 
 pub fn spawn_chat_stream(
     config: Config,
+    user: Option<String>,
     req: ChatRequest,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
     stream! {
-        info!("Spawning streaming agy turn for prompt (len={})", req.prompt.len());
+        config.ensure_user_dirs(user.as_deref());
+        info!("Spawning streaming agy turn for user '{:?}' (prompt len={})", user, req.prompt.len());
 
         let mut cmd = Command::new(&config.agy_bin);
-        cmd.current_dir(&config.workspace_dir);
+        cmd.current_dir(config.get_user_workspace_dir(user.as_deref()));
+        cmd.env("HOME", config.get_user_home(user.as_deref()));
         cmd.env("GEMINI_FORCE_FILE_STORAGE", "true");
+        cmd.env("GEMINI_CLI_DIR", config.get_user_gemini_cli_dir(user.as_deref()));
         cmd.arg("-p").arg(&req.prompt);
         cmd.arg("--output-format").arg("stream-json");
 
@@ -229,7 +239,6 @@ pub fn spawn_chat_stream(
                     continue;
                 }
 
-                // If it parses as JSON, inspect event type
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
                     let event_type = v.get("event").and_then(|e| e.as_str()).unwrap_or("message");
                     yield Ok(Event::default().event(event_type).data(trimmed.to_string()));
@@ -239,7 +248,6 @@ pub fn spawn_chat_stream(
             }
         }
 
-        // Wait for process termination
         let stderr = child.stderr.take();
         match child.wait().await {
             Ok(status) => {
@@ -281,10 +289,14 @@ pub fn spawn_chat_stream(
     }
 }
 
-pub async fn check_auth_status(config: &Config) -> bool {
+pub async fn check_auth_status(config: &Config, user: Option<&str>) -> bool {
+    config.ensure_user_dirs(user);
     let mut cmd = Command::new(&config.agy_bin);
     cmd.arg("models");
+    cmd.env("HOME", config.get_user_home(user));
     cmd.env("GEMINI_FORCE_FILE_STORAGE", "true");
+    cmd.env("GEMINI_CLI_DIR", config.get_user_gemini_cli_dir(user));
+    cmd.current_dir(config.get_user_workspace_dir(user));
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
@@ -293,4 +305,3 @@ pub async fn check_auth_status(config: &Config) -> bool {
         Err(_) => false,
     }
 }
-

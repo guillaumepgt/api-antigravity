@@ -3,7 +3,7 @@ use crate::config::Config;
 use async_stream::stream;
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{
         sse::{KeepAlive, Sse},
         IntoResponse, Json, Response,
@@ -127,14 +127,16 @@ fn extract_prompt_from_openai(messages: &[OpenAIMessage]) -> String {
 
 pub async fn openai_chat_completions(
     State(config): State<Arc<Config>>,
+    headers: HeaderMap,
     Json(payload): Json<OpenAIChatRequest>,
 ) -> Response {
+    let user = crate::auth::extract_user_from_headers(&headers, None);
     let prompt = extract_prompt_from_openai(&payload.messages);
     let chosen_model = map_model(payload.model.as_deref());
 
     info!(
-        "OpenAI chat completion request: model={}, stream={}, prompt_len={}",
-        chosen_model, payload.stream, prompt.len()
+        "OpenAI chat completion request for user '{}': model={}, stream={}, prompt_len={}",
+        user, chosen_model, payload.stream, prompt.len()
     );
 
     let chat_req = ChatRequest {
@@ -148,12 +150,12 @@ pub async fn openai_chat_completions(
     };
 
     if payload.stream {
-        let stream = spawn_openai_stream((*config).clone(), chat_req, chosen_model);
+        let stream = spawn_openai_stream((*config).clone(), Some(user), chat_req, chosen_model);
         Sse::new(stream)
             .keep_alive(KeepAlive::default())
             .into_response()
     } else {
-        match agy::execute_chat_sync(&config, &chat_req).await {
+        match agy::execute_chat_sync(&config, Some(&user), &chat_req).await {
             Ok(result) => {
                 let text = result
                     .get("response")
@@ -221,10 +223,13 @@ pub async fn openai_chat_completions(
 
 fn spawn_openai_stream(
     config: Config,
+    user: Option<String>,
     req: ChatRequest,
     model: String,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
     stream! {
+        let user_ref = user.as_deref();
+        config.ensure_user_dirs(user_ref);
         let id = format!("chatcmpl-{}", generate_id());
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -232,7 +237,9 @@ fn spawn_openai_stream(
             .as_secs();
 
         let mut cmd = Command::new(&config.agy_bin);
-        cmd.current_dir(&config.workspace_dir);
+        cmd.current_dir(config.get_user_workspace_dir(user_ref));
+        cmd.env("HOME", config.get_user_home(user_ref));
+        cmd.env("GEMINI_CLI_DIR", config.get_user_gemini_cli_dir(user_ref));
         cmd.env("GEMINI_FORCE_FILE_STORAGE", "true");
         cmd.arg("-p").arg(&req.prompt);
         cmd.arg("--output-format").arg("stream-json");
@@ -385,14 +392,16 @@ fn extract_prompt_from_anthropic(req: &AnthropicRequest) -> String {
 
 pub async fn anthropic_messages(
     State(config): State<Arc<Config>>,
+    headers: HeaderMap,
     Json(payload): Json<AnthropicRequest>,
 ) -> Response {
+    let user = crate::auth::extract_user_from_headers(&headers, None);
     let prompt = extract_prompt_from_anthropic(&payload);
     let chosen_model = map_model(payload.model.as_deref());
 
     info!(
-        "Anthropic messages request: model={}, stream={}, prompt_len={}",
-        chosen_model, payload.stream, prompt.len()
+        "Anthropic messages request for user '{}': model={}, stream={}, prompt_len={}",
+        user, chosen_model, payload.stream, prompt.len()
     );
 
     let chat_req = ChatRequest {
@@ -406,12 +415,12 @@ pub async fn anthropic_messages(
     };
 
     if payload.stream {
-        let stream = spawn_anthropic_stream((*config).clone(), chat_req, chosen_model);
+        let stream = spawn_anthropic_stream((*config).clone(), Some(user), chat_req, chosen_model);
         Sse::new(stream)
             .keep_alive(KeepAlive::default())
             .into_response()
     } else {
-        match agy::execute_chat_sync(&config, &chat_req).await {
+        match agy::execute_chat_sync(&config, Some(&user), &chat_req).await {
             Ok(result) => {
                 let text = result
                     .get("response")
@@ -473,10 +482,13 @@ pub async fn anthropic_messages(
 
 fn spawn_anthropic_stream(
     config: Config,
+    user: Option<String>,
     req: ChatRequest,
     model: String,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
     stream! {
+        let user_ref = user.as_deref();
+        config.ensure_user_dirs(user_ref);
         let id = format!("msg_{}", generate_id());
 
         // 1. message_start
@@ -503,7 +515,9 @@ fn spawn_anthropic_stream(
 
         // 3. Spawn process
         let mut cmd = Command::new(&config.agy_bin);
-        cmd.current_dir(&config.workspace_dir);
+        cmd.current_dir(config.get_user_workspace_dir(user_ref));
+        cmd.env("HOME", config.get_user_home(user_ref));
+        cmd.env("GEMINI_CLI_DIR", config.get_user_gemini_cli_dir(user_ref));
         cmd.env("GEMINI_FORCE_FILE_STORAGE", "true");
         cmd.arg("-p").arg(&req.prompt);
         cmd.arg("--output-format").arg("stream-json");
@@ -601,8 +615,12 @@ fn spawn_anthropic_stream(
 // 3. Models Endpoint (OpenAI format)
 // ========================================================
 
-pub async fn list_models_openai(State(config): State<Arc<Config>>) -> impl IntoResponse {
-    let models = agy::list_models(&config).await;
+pub async fn list_models_openai(
+    State(config): State<Arc<Config>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let user = crate::auth::extract_user_from_headers(&headers, None);
+    let models = agy::list_models(&config, Some(&user)).await;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

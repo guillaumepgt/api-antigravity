@@ -8,8 +8,8 @@ echo "========================================================="
 # 1. Démarrer le terminal web ttyd sur le port 7681
 # Permet à l'utilisateur de se connecter à son compte Google depuis son navigateur sans clé API !
 if command -v ttyd >/dev/null 2>&1; then
-    echo "📟 Lancement du terminal web d'authentification sur le port 7681..."
-    ttyd -b /terminal -p 7681 -W bash -c "echo '=== Authentification Antigravity (Google OAuth) ==='; echo 'Pour vous connecter, tapez: agy'; echo ''; agy; exec bash" &
+    echo "📟 Lancement du terminal web d'authentification sur le port 7681 (support multi-profils)..."
+    ttyd -b /terminal -p 7681 -a -W /usr/local/bin/terminal-wrapper.sh &
 fi
 
 # 2. Démarrer l'API backend Rust sur 127.0.0.1:8000

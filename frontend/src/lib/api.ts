@@ -28,13 +28,52 @@ export function saveStoredSettings(settings: AppSettings) {
   }
 }
 
-function getHeaders(apiKey?: string): HeadersInit {
-  const headers: HeadersInit = {
+export function getSessionToken(): string {
+  try {
+    const token = localStorage.getItem('antigravity_session_token');
+    if (token && token.trim()) {
+      return token.trim();
+    }
+  } catch (e) {
+    console.error('Error reading antigravity_session_token', e);
+  }
+  return '';
+}
+
+export function setSessionToken(token: string) {
+  try {
+    if (token && token.trim()) {
+      localStorage.setItem('antigravity_session_token', token.trim());
+      document.cookie = `antigravity_session=${token.trim()}; path=/; max-age=31536000; SameSite=Lax`;
+    } else {
+      localStorage.removeItem('antigravity_session_token');
+      document.cookie = 'antigravity_session=; path=/; max-age=0; SameSite=Lax';
+    }
+  } catch (e) {
+    console.error('Error saving session token', e);
+  }
+}
+
+export function clearSession() {
+  setSessionToken('');
+  try {
+    localStorage.removeItem('antigravity_user_email');
+    localStorage.removeItem('antigravity_user_id');
+  } catch {}
+}
+
+function getHeaders(apiKey?: string): Record<string, string> {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
-  const key = apiKey || getStoredSettings().apiKey;
-  if (key && key.trim().length > 0) {
-    headers['Authorization'] = `Bearer ${key.trim()}`;
+  const sessionToken = getSessionToken();
+  if (sessionToken) {
+    headers['Authorization'] = `Bearer ${sessionToken}`;
+  } else {
+    const key = apiKey || getStoredSettings().apiKey;
+    if (key && key.trim().length > 0) {
+      headers['Authorization'] = `Bearer ${key.trim()}`;
+    }
   }
   return headers;
 }
@@ -49,17 +88,66 @@ export async function checkHealth(apiKey?: string) {
   return res.json();
 }
 
-export async function checkAuthStatus(apiKey?: string): Promise<{ authenticated: boolean; message?: string; terminal_url?: string }> {
+export async function fetchMe(): Promise<{ authenticated: boolean; email?: string; user_id?: string; token?: string }> {
   try {
-    const res = await fetch('/api/auth/status', {
-      headers: getHeaders(apiKey),
+    const res = await fetch('/api/auth/me', {
+      headers: getHeaders(),
     });
-    if (!res.ok) {
-      return { authenticated: false };
+    if (!res.ok) return { authenticated: false };
+    const data = await res.json();
+    if (data.authenticated && data.token) {
+      setSessionToken(data.token);
     }
-    return await res.json();
+    return data;
   } catch {
     return { authenticated: false };
+  }
+}
+
+export async function startGoogleLogin(): Promise<{ login_id: string; ticket: string; terminal_url: string }> {
+  const res = await fetch('/api/auth/start-login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to start Google login: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function pollLogin(loginId: string): Promise<{ authenticated: boolean; token?: string; email?: string; user_id?: string }> {
+  const res = await fetch(`/api/auth/check-login?login_id=${encodeURIComponent(loginId)}`);
+  if (!res.ok) {
+    return { authenticated: false };
+  }
+  const data = await res.json();
+  if (data.authenticated && data.token) {
+    setSessionToken(data.token);
+  }
+  return data;
+}
+
+export async function openUserTerminal(): Promise<{ ticket: string; terminal_url: string }> {
+  const res = await fetch('/api/terminal/token', {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to create terminal token (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function logoutSession(): Promise<void> {
+  try {
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      headers: getHeaders(),
+    });
+  } catch {
+    // Ignore network error on logout
+  } finally {
+    clearSession();
   }
 }
 
@@ -74,7 +162,9 @@ export interface UserKeyInfo {
 }
 
 export async function fetchUserKey(): Promise<UserKeyInfo> {
-  const res = await fetch('/api/user/key');
+  const res = await fetch('/api/user/key', {
+    headers: getHeaders(),
+  });
   if (!res.ok) {
     throw new Error(`Failed to fetch user API key (${res.status})`);
   }
@@ -120,6 +210,28 @@ export async function fetchTranscript(conversationId: string, apiKey?: string) {
   });
   if (!res.ok) {
     throw new Error(`Failed to fetch transcript: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function deleteConversation(conversationId: string, apiKey?: string): Promise<{ status: string }> {
+  const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}`, {
+    method: 'DELETE',
+    headers: getHeaders(apiKey),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to delete conversation: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function clearAllConversations(apiKey?: string): Promise<{ status: string; deleted_count: number }> {
+  const res = await fetch('/api/conversations/clear', {
+    method: 'POST',
+    headers: getHeaders(apiKey),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to clear all conversations: ${res.statusText}`);
   }
   return res.json();
 }
