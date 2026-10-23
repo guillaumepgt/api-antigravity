@@ -152,7 +152,8 @@
       {/each}
       {#if models.length === 0}
         <option value="gemini-3.8-flash-high">Gemini 3.8 Flash (High)</option>
-        <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+        <option value="gemini-3.8-flash-medium">Gemini 3.8 Flash (Medium)</option>
+        <option value="gemini-3.8-flash-low">Gemini 3.8 Flash (Low)</option>
       {/if}
     </select>
   </div>

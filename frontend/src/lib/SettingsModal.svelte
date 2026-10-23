@@ -1,17 +1,19 @@
 <script lang="ts">
-  import type { AppSettings } from './types';
-  import { X, Key, Shield, Sliders, Globe, Save } from 'lucide-svelte';
+  import type { AppSettings, Model } from './types';
+  import { X, Key, Shield, Sliders, Globe, Save, Cpu } from 'lucide-svelte';
 
   interface Props {
     settings: AppSettings;
+    models?: Model[];
     isOpen: boolean;
     onClose: () => void;
     onSave: (newSettings: AppSettings) => void;
   }
 
-  let { settings, isOpen, onClose, onSave }: Props = $props();
+  let { settings, models = [], isOpen, onClose, onSave }: Props = $props();
 
   let formApiKey = $state('');
+  let formSelectedModel = $state('gemini-3.8-flash-high');
   let formMode = $state<'auto' | 'accept-edits' | 'plan'>('auto');
   let formEffort = $state<'low' | 'medium' | 'high' | 'xhigh' | 'max'>('high');
   let formDanger = $state(true);
@@ -21,16 +23,36 @@
   $effect(() => {
     if (isOpen) {
       formApiKey = settings.apiKey;
+      formSelectedModel = settings.selectedModel;
       formMode = settings.mode;
       formEffort = settings.effort;
       formDanger = settings.dangerouslySkipPermissions;
     }
   });
 
+  function handleModelChange(newModel: string) {
+    formSelectedModel = newModel;
+    if (newModel.endsWith('-low')) formEffort = 'low';
+    else if (newModel.endsWith('-medium')) formEffort = 'medium';
+    else if (newModel.endsWith('-high')) formEffort = 'high';
+    else if (newModel.endsWith('-xhigh')) formEffort = 'xhigh';
+    else if (newModel.endsWith('-max')) formEffort = 'max';
+  }
+
+  function handleEffortChange(newEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max') {
+    formEffort = newEffort;
+    if (formSelectedModel.startsWith('gemini-3.8-flash-')) {
+      if (newEffort === 'low' || newEffort === 'medium' || newEffort === 'high') {
+        formSelectedModel = `gemini-3.8-flash-${newEffort}`;
+      }
+    }
+  }
+
   function handleSave() {
     onSave({
       ...settings,
       apiKey: formApiKey.trim(),
+      selectedModel: formSelectedModel,
       mode: formMode,
       effort: formEffort,
       dangerouslySkipPermissions: formDanger,
@@ -98,6 +120,30 @@
             </p>
           </div>
 
+          <!-- Model Selection -->
+          <div>
+            <label for="setting-model" class="block font-medium text-slate-300 mb-1 flex items-center gap-1.5">
+              <Cpu size={13} class="text-indigo-400" />
+              Modèle d'IA par défaut
+            </label>
+            <select
+              id="setting-model"
+              value={formSelectedModel}
+              onchange={(e) => handleModelChange((e.target as HTMLSelectElement).value)}
+              class="w-full bg-[#181c28] border border-slate-800 text-slate-200 rounded-lg px-3 py-2 outline-none focus:border-blue-500 cursor-pointer"
+            >
+              {#each models as model}
+                <option value={model.id}>{model.name}</option>
+              {/each}
+              {#if models.length === 0}
+                <option value="gemini-3.8-flash-high">Gemini 3.8 Flash (High)</option>
+                <option value="gemini-3.8-flash-medium">Gemini 3.8 Flash (Medium)</option>
+                <option value="gemini-3.8-flash-low">Gemini 3.8 Flash (Low)</option>
+                <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (Thinking)</option>
+              {/if}
+            </select>
+          </div>
+
           <!-- Execution Mode -->
           <div>
             <label for="setting-mode" class="block font-medium text-slate-300 mb-1">Agent Mode</label>
@@ -114,17 +160,18 @@
 
           <!-- Reasoning Effort -->
           <div>
-            <label for="setting-effort" class="block font-medium text-slate-300 mb-1">Reasoning Effort</label>
+            <label for="setting-effort" class="block font-medium text-slate-300 mb-1">Niveau de Réflexion (Reasoning Effort)</label>
             <select
               id="setting-effort"
-              bind:value={formEffort}
+              value={formEffort}
+              onchange={(e) => handleEffortChange((e.target as HTMLSelectElement).value as any)}
               class="w-full bg-[#181c28] border border-slate-800 text-slate-200 rounded-lg px-3 py-2 outline-none focus:border-blue-500 cursor-pointer"
             >
-              <option value="low">low (Fastest, minimal thinking)</option>
-              <option value="medium">medium (Balanced)</option>
-              <option value="high">high (Default, deep reasoning)</option>
-              <option value="xhigh">xhigh (Extra high reasoning)</option>
-              <option value="max">max (Maximum reasoning depth)</option>
+              <option value="low">low (Rapide, réflexion minimale)</option>
+              <option value="medium">medium (Équilibré)</option>
+              <option value="high">high (Par défaut, réflexion approfondie)</option>
+              <option value="xhigh">xhigh (Réflexion extra haute)</option>
+              <option value="max">max (Réflexion maximale)</option>
             </select>
           </div>
 

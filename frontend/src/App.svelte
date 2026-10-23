@@ -264,7 +264,18 @@
   }
 
   function handleSelectModel(modelId: string) {
-    settings.selectedModel = modelId;
+    let newEffort = settings.effort;
+    if (modelId.endsWith('-low')) newEffort = 'low';
+    else if (modelId.endsWith('-medium')) newEffort = 'medium';
+    else if (modelId.endsWith('-high')) newEffort = 'high';
+    else if (modelId.endsWith('-xhigh')) newEffort = 'xhigh';
+    else if (modelId.endsWith('-max')) newEffort = 'max';
+
+    settings = {
+      ...settings,
+      selectedModel: modelId,
+      effort: newEffort,
+    };
     saveStoredSettings(settings);
   }
 
@@ -318,9 +329,8 @@
   }
 
   function handleSaveSettings(newSettings: AppSettings) {
-    settings = newSettings;
+    settings = { ...newSettings };
     saveStoredSettings(settings);
-    initApp();
   }
 
   async function handleStartGoogleLogin() {
@@ -626,10 +636,24 @@
               <Trash2 size={13} />
             </button>
           {/if}
-          <span class="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900/85 border border-slate-800/80 text-[11px] text-slate-400 backdrop-blur-md shadow-sm font-mono">
-            <Cpu size={12} class="text-indigo-400" />
-            {currentModelName}
-          </span>
+          <div class="pointer-events-auto flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900/90 hover:bg-slate-800 border border-slate-800/80 text-[11px] text-slate-300 backdrop-blur-md shadow-sm transition-all">
+            <Cpu size={12} class="text-indigo-400 shrink-0" />
+            <select
+              value={settings.selectedModel}
+              onchange={(e) => handleSelectModel((e.target as HTMLSelectElement).value)}
+              class="bg-transparent text-slate-200 outline-none cursor-pointer pr-1 text-[11px] font-medium"
+              title="Changer de modèle ou niveau de réflexion"
+            >
+              {#each models as model}
+                <option value={model.id} class="bg-[#141722] text-slate-200">{model.name}</option>
+              {/each}
+              {#if models.length === 0}
+                <option value="gemini-3.8-flash-high" class="bg-[#141722] text-slate-200">Gemini 3.8 Flash (High)</option>
+                <option value="gemini-3.8-flash-medium" class="bg-[#141722] text-slate-200">Gemini 3.8 Flash (Medium)</option>
+                <option value="gemini-3.8-flash-low" class="bg-[#141722] text-slate-200">Gemini 3.8 Flash (Low)</option>
+              {/if}
+            </select>
+          </div>
           <a
             href="/?c=new"
             target="_blank"
@@ -705,6 +729,7 @@
   <SettingsModal
     isOpen={isSettingsOpen}
     {settings}
+    {models}
     onClose={() => (isSettingsOpen = false)}
     onSave={handleSaveSettings}
   />

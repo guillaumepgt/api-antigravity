@@ -109,6 +109,32 @@ pub async fn list_models(config: &Config, user: Option<&str>) -> Vec<ModelInfo> 
     ]
 }
 
+fn apply_model_and_effort(cmd: &mut Command, model: Option<&str>, effort: Option<&str>) {
+    let clean_model = model.map(|m| m.trim()).filter(|m| !m.is_empty());
+    let clean_effort = effort.map(|e| e.trim()).filter(|e| !e.is_empty());
+
+    if let Some(m) = clean_model {
+        cmd.arg("--model").arg(m);
+
+        let is_claude = m.starts_with("claude");
+        let has_embedded_effort = m.ends_with("-low")
+            || m.ends_with("-medium")
+            || m.ends_with("-high")
+            || m.ends_with("-xhigh")
+            || m.ends_with("-max");
+
+        // Do not pass --effort for models that do not support it (e.g. claude)
+        // or models that already embed the effort level in their name (e.g. gemini-3.8-flash-low)
+        if !is_claude && !has_embedded_effort {
+            if let Some(eff) = clean_effort {
+                cmd.arg("--effort").arg(eff);
+            }
+        }
+    } else if let Some(eff) = clean_effort {
+        cmd.arg("--effort").arg(eff);
+    }
+}
+
 pub async fn execute_chat_sync(
     config: &Config,
     user: Option<&str>,
@@ -129,21 +155,11 @@ pub async fn execute_chat_sync(
         }
     }
 
-    if let Some(ref model) = req.model {
-        if !model.trim().is_empty() {
-            cmd.arg("--model").arg(model.trim());
-        }
-    }
+    apply_model_and_effort(&mut cmd, req.model.as_deref(), req.effort.as_deref());
 
     if let Some(ref mode) = req.mode {
         if !mode.trim().is_empty() {
             cmd.arg("--mode").arg(mode.trim());
-        }
-    }
-
-    if let Some(ref effort) = req.effort {
-        if !effort.trim().is_empty() {
-            cmd.arg("--effort").arg(effort.trim());
         }
     }
 
@@ -192,21 +208,11 @@ pub fn spawn_chat_stream(
             }
         }
 
-        if let Some(ref model) = req.model {
-            if !model.trim().is_empty() {
-                cmd.arg("--model").arg(model.trim());
-            }
-        }
+        apply_model_and_effort(&mut cmd, req.model.as_deref(), req.effort.as_deref());
 
         if let Some(ref mode) = req.mode {
             if !mode.trim().is_empty() {
                 cmd.arg("--mode").arg(mode.trim());
-            }
-        }
-
-        if let Some(ref effort) = req.effort {
-            if !effort.trim().is_empty() {
-                cmd.arg("--effort").arg(effort.trim());
             }
         }
 

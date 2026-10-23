@@ -138,19 +138,21 @@
       <!-- Right: Model, Actions & User Profile -->
       <div class="flex items-center gap-2 sm:gap-3">
         <!-- Model Selector Dropdown -->
-        <div class="hidden sm:flex items-center gap-1.5 bg-[#141722] border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs">
+        <div class="flex items-center gap-1.5 bg-[#141722] border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs">
           <Cpu size={13} class="text-indigo-400 shrink-0" />
           <select
             value={selectedModel}
             onchange={(e) => onSelectModel((e.target as HTMLSelectElement).value)}
             class="bg-transparent text-slate-200 outline-none cursor-pointer pr-1"
+            title="Sélectionner le modèle et niveau de réflexion"
           >
             {#each models as model}
               <option value={model.id} class="bg-[#141722] text-slate-200">{model.name}</option>
             {/each}
             {#if models.length === 0}
-              <option value="gemini-3.8-flash-high" class="bg-[#141722] text-slate-200">Gemini 3.8 Flash</option>
-              <option value="claude-sonnet-4-6" class="bg-[#141722] text-slate-200">Claude Sonnet 4.6</option>
+              <option value="gemini-3.8-flash-high" class="bg-[#141722] text-slate-200">Gemini 3.8 Flash (High)</option>
+              <option value="gemini-3.8-flash-medium" class="bg-[#141722] text-slate-200">Gemini 3.8 Flash (Medium)</option>
+              <option value="gemini-3.8-flash-low" class="bg-[#141722] text-slate-200">Gemini 3.8 Flash (Low)</option>
             {/if}
           </select>
         </div>
