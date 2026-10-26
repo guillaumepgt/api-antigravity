@@ -348,6 +348,7 @@ pub async fn auth_middleware(
         || path == "/api/auth/start-login"
         || path == "/api/auth/check-login"
         || path == "/api/auth/me"
+        || path == "/api/auth/logout"
         || path == "/api/internal/verify-terminal-ticket"
     {
         return next.run(req).await;

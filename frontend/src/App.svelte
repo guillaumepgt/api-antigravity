@@ -14,6 +14,7 @@
     pollLogin,
     openUserTerminal,
     logoutSession,
+    clearSession,
     fetchConversations,
     fetchModels,
     fetchTranscript,
@@ -51,12 +52,10 @@
     try {
       const sess = localStorage.getItem('antigravity_session_token');
       if (sess && sess.trim()) return true;
-      const rawSettings = localStorage.getItem('antigravity_settings');
-      if (rawSettings) {
-        const parsed = JSON.parse(rawSettings);
-        if (parsed?.apiKey && parsed.apiKey.trim()) return true;
+      if (document.cookie && document.cookie.includes('antigravity_session=')) {
+        const match = document.cookie.match(/(?:^|;\s*)antigravity_session=([^;]+)/);
+        if (match && match[1] && match[1].trim()) return true;
       }
-      if (document.cookie && document.cookie.includes('antigravity_session=')) return true;
     } catch {}
     return false;
   }
@@ -155,6 +154,16 @@
             fetchConversations(settings.apiKey)
               .then((c) => (conversations = c))
               .catch(() => {});
+          } else if (event.data?.type === 'USER_LOGGED_OUT') {
+            isAuthenticated = false;
+            userEmail = '';
+            userId = '';
+            messages = [];
+            conversations = [];
+            currentConversationId = null;
+            isChatMode = false;
+            settings.apiKey = '';
+            clearSession();
           }
         };
       } catch {}
@@ -218,6 +227,7 @@
         isCheckingAuth = false;
         messages = [];
         conversations = [];
+        clearSession();
         return;
       }
     } catch {
@@ -462,7 +472,9 @@
       conversations = [];
       currentConversationId = null;
       isChatMode = false;
-      window.location.href = '/';
+      settings.apiKey = '';
+      broadcastSync({ type: 'USER_LOGGED_OUT' });
+      window.history.replaceState({}, '', '/');
     }
   }
 

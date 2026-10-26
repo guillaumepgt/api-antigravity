@@ -4,7 +4,7 @@ use crate::config::Config;
 use crate::conversations::{self};
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{
         sse::{KeepAlive, Sse},
         IntoResponse, Json, Response,
@@ -141,11 +141,11 @@ pub async fn check_login(
 }
 
 pub async fn auth_me(
-    State(config): State<Arc<Config>>,
+    State(_config): State<Arc<Config>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     if let Some(token) = auth::extract_token_from_headers(&headers) {
-        if let Some(session) = auth::get_session_or_key(&config, &token) {
+        if let Some(session) = auth::get_session(&token) {
             return Json(json!({
                 "authenticated": true,
                 "email": session.email,
@@ -166,10 +166,22 @@ pub async fn auth_logout(
     if let Some(token) = auth::extract_token_from_headers(&headers) {
         auth::delete_session(&token);
     }
-    Json(json!({
-        "status": "logged_out",
-        "message": "Déconnexion réussie."
-    }))
+
+    let mut resp_headers = HeaderMap::new();
+    if let Ok(c1) = "antigravity_session=; Path=/; Max-Age=0; SameSite=Lax".parse() {
+        resp_headers.insert(header::SET_COOKIE, c1);
+    }
+    if let Ok(c2) = "antigravity_token=; Path=/; Max-Age=0; SameSite=Lax".parse() {
+        resp_headers.append(header::SET_COOKIE, c2);
+    }
+
+    (
+        resp_headers,
+        Json(json!({
+            "status": "logged_out",
+            "message": "Déconnexion réussie."
+        })),
+    )
 }
 
 pub async fn create_user_terminal_token(

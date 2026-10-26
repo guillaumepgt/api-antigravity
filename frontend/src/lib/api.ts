@@ -34,6 +34,14 @@ export function getSessionToken(): string {
     if (token && token.trim()) {
       return token.trim();
     }
+    if (typeof document !== 'undefined' && document.cookie) {
+      for (const pair of document.cookie.split(';')) {
+        const [k, v] = pair.trim().split('=');
+        if (k === 'antigravity_session' && v && v.trim()) {
+          return decodeURIComponent(v.trim());
+        }
+      }
+    }
   } catch (e) {
     console.error('Error reading antigravity_session_token', e);
   }
@@ -44,10 +52,11 @@ export function setSessionToken(token: string) {
   try {
     if (token && token.trim()) {
       localStorage.setItem('antigravity_session_token', token.trim());
-      document.cookie = `antigravity_session=${token.trim()}; path=/; max-age=31536000; SameSite=Lax`;
+      document.cookie = `antigravity_session=${encodeURIComponent(token.trim())}; path=/; max-age=31536000; SameSite=Lax`;
     } else {
       localStorage.removeItem('antigravity_session_token');
       document.cookie = 'antigravity_session=; path=/; max-age=0; SameSite=Lax';
+      document.cookie = 'antigravity_token=; path=/; max-age=0; SameSite=Lax';
     }
   } catch (e) {
     console.error('Error saving session token', e);
@@ -59,6 +68,11 @@ export function clearSession() {
   try {
     localStorage.removeItem('antigravity_user_email');
     localStorage.removeItem('antigravity_user_id');
+    const s = getStoredSettings();
+    if (s.apiKey) {
+      s.apiKey = '';
+      saveStoredSettings(s);
+    }
   } catch {}
 }
 
@@ -90,13 +104,25 @@ export async function checkHealth(apiKey?: string) {
 
 export async function fetchMe(): Promise<{ authenticated: boolean; email?: string; user_id?: string; token?: string }> {
   try {
+    const sessionToken = getSessionToken();
+    if (!sessionToken) {
+      return { authenticated: false };
+    }
     const res = await fetch('/api/auth/me', {
-      headers: getHeaders(),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${sessionToken}`,
+      },
     });
-    if (!res.ok) return { authenticated: false };
+    if (!res.ok) {
+      clearSession();
+      return { authenticated: false };
+    }
     const data = await res.json();
     if (data.authenticated && data.token) {
       setSessionToken(data.token);
+    } else {
+      clearSession();
     }
     return data;
   } catch {
@@ -140,10 +166,16 @@ export async function openUserTerminal(): Promise<{ ticket: string; terminal_url
 
 export async function logoutSession(): Promise<void> {
   try {
-    await fetch('/api/auth/logout', {
-      method: 'POST',
-      headers: getHeaders(),
-    });
+    const sessionToken = getSessionToken();
+    if (sessionToken) {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${sessionToken}`,
+        },
+      });
+    }
   } catch {
     // Ignore network error on logout
   } finally {
