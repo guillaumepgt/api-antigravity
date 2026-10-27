@@ -4,6 +4,7 @@ mod auth;
 mod compat;
 mod config;
 mod conversations;
+mod mcp;
 
 use axum::{
     middleware,
@@ -72,6 +73,10 @@ use tower_http::services::{ServeDir, ServeFile};
             "/api/conversations/{id}/transcript",
             get(api::get_conversation_transcript),
         )
+        .route("/api/mcp", get(api::list_mcp_servers).post(api::add_mcp_server))
+        .route("/api/mcp/presets", get(api::list_mcp_presets))
+        .route("/api/mcp/{name}", delete(api::delete_mcp_server))
+        .route("/api/mcp/{name}/toggle", post(api::toggle_mcp_server))
         .route("/api/chat", post(api::handle_chat))
         .route("/api/spawn", post(api::spawn_instance_handler).get(api::spawn_instance_handler))
         .route("/spawn", get(api::spawn_instance_handler).post(api::spawn_instance_handler))

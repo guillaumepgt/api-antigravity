@@ -1,8 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from './hooks/useAuth';
 import { useSettings } from './hooks/useSettings';
 import { useTerminal } from './hooks/useTerminal';
 import { useChat } from './hooks/useChat';
+import { useMcp } from './hooks/useMcp';
 
 import { Sidebar } from './components/Sidebar';
 import { MainPage } from './components/MainPage';
@@ -11,6 +12,7 @@ import { AuthModal } from './components/AuthModal';
 import { TerminalModal } from './components/TerminalModal';
 import { SettingsModal } from './components/SettingsModal';
 import { ApiKeyModal } from './components/ApiKeyModal';
+import { McpModal } from './components/McpModal';
 
 export const App: React.FC = () => {
   const {
@@ -73,6 +75,9 @@ export const App: React.FC = () => {
     reset: resetChat,
   } = useChat(settings);
 
+  const [isMcpModalOpen, setIsMcpModalOpen] = useState(false);
+  const mcp = useMcp(isAuthenticated);
+
   // Initialize App on mount
   useEffect(() => {
     initFromUrl();
@@ -133,6 +138,7 @@ export const App: React.FC = () => {
               onOpenSettings={openSettings}
               onOpenTerminal={openUserTerminal}
               onOpenApiKeyModal={openApiKeyModal}
+              onOpenMcpModal={() => setIsMcpModalOpen(true)}
               onDeleteConversation={deleteConversation}
               onClearAllConversations={clearAllConversations}
               onLogout={() => logout(resetChat)}
@@ -153,6 +159,7 @@ export const App: React.FC = () => {
               onSelectModel={selectModel}
               onOpenTerminal={openUserTerminal}
               onOpenApiKeyModal={openApiKeyModal}
+              onOpenMcpModal={() => setIsMcpModalOpen(true)}
               onOpenSettings={openSettings}
               onDeleteConversation={deleteConversation}
               onClearAllConversations={clearAllConversations}
@@ -206,6 +213,22 @@ export const App: React.FC = () => {
         keyInfo={keyInfo}
         onClose={closeApiKeyModal}
         onKeyUpdated={setApiKey}
+      />
+
+      {/* MCP Servers Modal */}
+      <McpModal
+        isOpen={isMcpModalOpen}
+        onClose={() => setIsMcpModalOpen(false)}
+        servers={mcp.servers}
+        presets={mcp.presets}
+        loading={mcp.loading}
+        actionLoading={mcp.actionLoading}
+        error={mcp.error}
+        onRefresh={mcp.refresh}
+        onAddOrUpdate={mcp.addOrUpdate}
+        onRemove={mcp.remove}
+        onToggle={mcp.toggle}
+        onInstallPreset={mcp.installPreset}
       />
     </div>
   );

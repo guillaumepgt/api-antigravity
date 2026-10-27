@@ -1,4 +1,4 @@
-import type { AppSettings, Conversation, Model, UsageInfo } from './types';
+import type { AppSettings, Conversation, Model, UsageInfo, McpServer, McpPreset } from './types';
 
 export function getStoredSettings(): AppSettings {
   const defaultSettings: AppSettings = {
@@ -400,3 +400,64 @@ export async function streamChat(
     reader.releaseLock();
   }
 }
+
+export async function fetchMcpServers(apiKey?: string): Promise<McpServer[]> {
+  const res = await fetch('/api/mcp', {
+    headers: getHeaders(apiKey),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch MCP servers: ${res.statusText}`);
+  }
+  const data = await res.json();
+  return data.servers || [];
+}
+
+export async function fetchMcpPresets(apiKey?: string): Promise<McpPreset[]> {
+  const res = await fetch('/api/mcp/presets', {
+    headers: getHeaders(apiKey),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch MCP presets: ${res.statusText}`);
+  }
+  const data = await res.json();
+  return data.presets || [];
+}
+
+export async function saveMcpServer(server: McpServer, apiKey?: string): Promise<{ status: string; server: McpServer }> {
+  const res = await fetch('/api/mcp', {
+    method: 'POST',
+    headers: getHeaders(apiKey),
+    body: JSON.stringify(server),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText }));
+    throw new Error(err.message || 'Failed to save MCP server');
+  }
+  return res.json();
+}
+
+export async function deleteMcpServer(name: string, apiKey?: string): Promise<{ status: string }> {
+  const res = await fetch(`/api/mcp/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    headers: getHeaders(apiKey),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText }));
+    throw new Error(err.message || 'Failed to delete MCP server');
+  }
+  return res.json();
+}
+
+export async function toggleMcpServer(name: string, disabled?: boolean, apiKey?: string): Promise<{ status: string; name: string; disabled: boolean }> {
+  const res = await fetch(`/api/mcp/${encodeURIComponent(name)}/toggle`, {
+    method: 'POST',
+    headers: getHeaders(apiKey),
+    body: JSON.stringify({ disabled }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText }));
+    throw new Error(err.message || 'Failed to toggle MCP server');
+  }
+  return res.json();
+}
+

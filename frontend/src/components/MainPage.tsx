@@ -22,6 +22,7 @@ import {
   Zap,
   LogOut,
   Sparkles,
+  Boxes,
 } from 'lucide-react';
 import { filterConversations, formatRelativeDate } from '../lib/helpers';
 
@@ -37,6 +38,7 @@ interface Props {
   onSelectModel: (modelId: string) => void;
   onOpenTerminal: () => void;
   onOpenApiKeyModal: () => void;
+  onOpenMcpModal?: () => void;
   onOpenSettings: () => void;
   onDeleteConversation?: (id: string) => void;
   onClearAllConversations?: () => void;
@@ -54,6 +56,7 @@ export const MainPage: React.FC<Props> = ({
   onSelectModel,
   onOpenTerminal,
   onOpenApiKeyModal,
+  onOpenMcpModal,
   onOpenSettings,
   onDeleteConversation,
   onClearAllConversations,
@@ -204,6 +207,19 @@ export const MainPage: React.FC<Props> = ({
               <Key size={13} className="text-violet-400" />
               <span className="hidden sm:inline">API</span>
             </button>
+
+            {/* MCP Servers */}
+            {onOpenMcpModal && (
+              <button
+                type="button"
+                onClick={onOpenMcpModal}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-fuchsia-500/10 border border-fuchsia-500/20 hover:bg-fuchsia-500/20 text-fuchsia-300 text-xs font-medium transition-all cursor-pointer"
+                title="Gérer les serveurs MCP (Navigateur Web, Camoufox, Outils)"
+              >
+                <Boxes size={13} className="text-fuchsia-400" />
+                <span className="hidden sm:inline">MCP</span>
+              </button>
+            )}
 
             {/* Settings */}
             <button

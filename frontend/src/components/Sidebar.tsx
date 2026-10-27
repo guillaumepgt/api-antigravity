@@ -12,6 +12,7 @@ import {
   Key,
   Cpu,
   LogOut,
+  Boxes,
 } from 'lucide-react';
 import { filterConversations, formatRelativeDate } from '../lib/helpers';
 
@@ -29,6 +30,7 @@ interface Props {
   onOpenSettings: () => void;
   onOpenTerminal: () => void;
   onOpenApiKeyModal?: () => void;
+  onOpenMcpModal?: () => void;
   onDeleteConversation?: (id: string) => void;
   onClearAllConversations?: () => void;
   onLogout: () => void;
@@ -46,6 +48,7 @@ export const Sidebar: React.FC<Props> = ({
   onOpenSettings,
   onOpenTerminal,
   onOpenApiKeyModal,
+  onOpenMcpModal,
   onDeleteConversation,
   onClearAllConversations,
   onLogout,
@@ -272,37 +275,49 @@ export const Sidebar: React.FC<Props> = ({
 
       {/* Bottom Control Dock & User Profile */}
       <div className="p-3 border-t border-white/[0.06] bg-[#06070b]/60 space-y-2">
-        <div className="grid grid-cols-3 gap-1.5">
+        <div className="grid grid-cols-4 gap-1">
           <button
             type="button"
             onClick={onOpenTerminal}
-            className="flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/[0.05] text-zinc-300 hover:text-white text-[10px] font-medium transition-all cursor-pointer"
+            className="flex flex-col items-center justify-center gap-1 py-2 px-0.5 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/[0.05] text-zinc-300 hover:text-white text-[10px] font-medium transition-all cursor-pointer"
             title="Terminal Web"
           >
-            <Terminal size={14} className="text-cyan-400" />
-            <span>Terminal</span>
+            <Terminal size={13} className="text-cyan-400" />
+            <span className="truncate">Terminal</span>
           </button>
 
           {onOpenApiKeyModal && (
             <button
               type="button"
               onClick={onOpenApiKeyModal}
-              className="flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/[0.05] text-zinc-300 hover:text-white text-[10px] font-medium transition-all cursor-pointer"
+              className="flex flex-col items-center justify-center gap-1 py-2 px-0.5 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/[0.05] text-zinc-300 hover:text-white text-[10px] font-medium transition-all cursor-pointer"
               title="Clé API & SDK"
             >
-              <Key size={14} className="text-violet-400" />
-              <span>Clé API</span>
+              <Key size={13} className="text-violet-400" />
+              <span className="truncate">Clé API</span>
+            </button>
+          )}
+
+          {onOpenMcpModal && (
+            <button
+              type="button"
+              onClick={onOpenMcpModal}
+              className="flex flex-col items-center justify-center gap-1 py-2 px-0.5 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/[0.05] text-zinc-300 hover:text-white text-[10px] font-medium transition-all cursor-pointer"
+              title="Serveurs MCP (Navigateur, Outils)"
+            >
+              <Boxes size={13} className="text-fuchsia-400" />
+              <span className="truncate">MCP</span>
             </button>
           )}
 
           <button
             type="button"
             onClick={onOpenSettings}
-            className="flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/[0.05] text-zinc-300 hover:text-white text-[10px] font-medium transition-all cursor-pointer"
+            className="flex flex-col items-center justify-center gap-1 py-2 px-0.5 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/[0.05] text-zinc-300 hover:text-white text-[10px] font-medium transition-all cursor-pointer"
             title="Paramètres & Accès distant"
           >
-            <SettingsIcon size={14} className="text-amber-400" />
-            <span>Réglages</span>
+            <SettingsIcon size={13} className="text-amber-400" />
+            <span className="truncate">Réglages</span>
           </button>
         </div>
 

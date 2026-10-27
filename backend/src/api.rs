@@ -598,3 +598,77 @@ echo "========================================================="
 
     ([(axum::http::header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")], script)
 }
+
+#[derive(Debug, Deserialize, Default)]
+pub struct McpTogglePayload {
+    pub disabled: Option<bool>,
+}
+
+pub async fn list_mcp_servers(
+    State(config): State<Arc<Config>>,
+    headers: HeaderMap,
+    Query(query): Query<UserQuery>,
+) -> Response {
+    let user = auth::extract_user_from_headers(&headers, query.user.as_deref());
+    let servers = crate::mcp::list_servers(&config, Some(&user));
+    Json(json!({ "servers": servers })).into_response()
+}
+
+pub async fn list_mcp_presets() -> Response {
+    let presets = crate::mcp::get_builtin_presets();
+    Json(json!({ "presets": presets })).into_response()
+}
+
+pub async fn add_mcp_server(
+    State(config): State<Arc<Config>>,
+    headers: HeaderMap,
+    Query(query): Query<UserQuery>,
+    Json(payload): Json<crate::mcp::McpServerConfig>,
+) -> Response {
+    let user = auth::extract_user_from_headers(&headers, query.user.as_deref());
+    match crate::mcp::upsert_server(&config, Some(&user), payload.clone()) {
+        Ok(_) => Json(json!({ "status": "ok", "server": payload })).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Bad Request", "message": e })),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn delete_mcp_server(
+    State(config): State<Arc<Config>>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Query(query): Query<UserQuery>,
+) -> Response {
+    let user = auth::extract_user_from_headers(&headers, query.user.as_deref());
+    match crate::mcp::remove_server(&config, Some(&user), &name) {
+        Ok(_) => Json(json!({ "status": "ok", "removed": name })).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Not Found", "message": e })),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn toggle_mcp_server(
+    State(config): State<Arc<Config>>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Query(query): Query<UserQuery>,
+    payload: Option<Json<McpTogglePayload>>,
+) -> Response {
+    let user = auth::extract_user_from_headers(&headers, query.user.as_deref());
+    let target_state = payload.and_then(|p| p.disabled);
+    match crate::mcp::toggle_server(&config, Some(&user), &name, target_state) {
+        Ok(disabled) => Json(json!({ "status": "ok", "name": name, "disabled": disabled })).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Not Found", "message": e })),
+        )
+            .into_response(),
+    }
+}
+

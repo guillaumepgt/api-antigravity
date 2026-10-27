@@ -42,3 +42,30 @@ export interface AppSettings {
   effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   dangerouslySkipPermissions: boolean;
 }
+
+export interface McpServer {
+  name: string;
+  server_type: 'stdio' | 'http';
+  command?: string;
+  args?: string[];
+  serverUrl?: string;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  disabled: boolean;
+}
+
+export interface McpPreset {
+  id: string;
+  name: string;
+  title: string;
+  description: string;
+  icon: string;
+  category: 'browser' | 'system' | 'web' | 'developer' | string;
+  server_type: 'stdio' | 'http';
+  command?: string;
+  args?: string[];
+  serverUrl?: string;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+}
+
