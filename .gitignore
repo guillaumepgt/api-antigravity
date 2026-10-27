@@ -20,6 +20,7 @@ auth_info_baileys/
 # Local Workspace & Generated Data
 workspace/*
 !workspace/.gitkeep
+!workspace/GEMINI.md
 .gemini/
 *.sqlite
 *.sqlite3

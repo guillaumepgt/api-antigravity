@@ -148,6 +148,14 @@ impl Config {
             let _ = std::fs::create_dir_all(&gemini_cli);
             let ws = self.get_user_workspace_dir(Some(&safe_user));
             let _ = std::fs::create_dir_all(&ws);
+
+            let user_gemini_md = ws.join("GEMINI.md");
+            if !user_gemini_md.exists() {
+                let base_gemini_md = self.workspace_dir.join("GEMINI.md");
+                if base_gemini_md.exists() {
+                    let _ = std::fs::copy(&base_gemini_md, &user_gemini_md);
+                }
+            }
         }
     }
 }
